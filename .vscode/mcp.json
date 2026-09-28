@@ -1,0 +1,21 @@
+{
+	"servers": {
+		"com.apify/apify-mcp-server": {
+			"type": "http",
+			"url": "https://mcp.apify.com/",
+			"headers": {
+				"Authorization": "${input:Authorization}"
+			},
+			"gallery": "https://api.mcp.github.com",
+			"version": "0.16.0"
+		}
+	},
+	"inputs": [
+		{
+			"id": "Authorization",
+			"type": "promptString",
+			"description": "Apify API token for authentication with Apify platform services. For example 'Bearer <apify-api-token>'",
+			"password": true
+		}
+	]
+}

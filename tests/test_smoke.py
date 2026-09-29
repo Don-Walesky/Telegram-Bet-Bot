@@ -1,6 +1,7 @@
 """Smoke tests for Telegram Bet Bot foundation."""
 
 import importlib
+from pathlib import Path
 import pytest
 from telegram_bet_bot.config import Config, ConfigurationError
 from telegram_bet_bot.main import main
@@ -53,7 +54,7 @@ def test_config_production_requires_token(monkeypatch: pytest.MonkeyPatch) -> No
         Config.from_env(load_dotenv_file=False)
 
 
-def test_config_from_explicit_env_file(tmp_path: pytest.TempPathFactory) -> None:
+def test_config_from_explicit_env_file(tmp_path: Path) -> None:
     """Verify loading configuration from an explicit custom .env file."""
     env_file = tmp_path / "custom.env"
     env_file.write_text("APP_ENV=testing\nLOG_LEVEL=DEBUG\nBOT_TOKEN=test-token\n")

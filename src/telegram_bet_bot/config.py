@@ -1,7 +1,6 @@
 """Configuration management for Telegram Bet Bot."""
 
 from dataclasses import dataclass
-import logging
 import os
 from pathlib import Path
 from dotenv import load_dotenv

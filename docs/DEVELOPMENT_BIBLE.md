@@ -501,11 +501,11 @@ Where:
 
 ### Phase Evolution of Learning
 
-- **Phase 1 to Phase 6 (Deterministic / Empirical):**
+- **Phase 1 to Phase 7 (Deterministic / Empirical):**
   - Track empirical hit rate, ROI, average odds, and profit/loss per tipster channel and market type.
   - Weight tipster consensus scores by historical reliability ($w_i = \text{ROI}_{\text{historical}} \times \text{VolumeDiscount}$).
   - No speculative ML algorithms.
-- **Phase 9+ (Future Genuine Predictive Modeling):**
+- **Phase 10+ (Future Genuine Predictive Modeling):**
   - Initiated only after accumulating $\ge 1,000$ settled standardized fixture records.
   - Feature engineering on historical performance, expected goals (xG), home/away splits, rest days.
   - Strict out-of-time walk-forward validation and Brier score calibration before model inference goes live.
@@ -573,34 +573,44 @@ Development strictly proceeds one phase at a time. Each phase requires:
    └── README.md
         │
         ▼
-[Phase 1: Project Scaffolding, Config & Core Domain Models]
-   ├── Project structure (src/ layout), pyproject.toml / requirements
-   ├── Configuration subsystem (typed settings, env loader)
-   ├── Pure Domain Entities & Value Objects (Sport, League, Fixture, Market, Selection, Odds, RiskTier)
-   └── Unit tests for domain models & invariants
+[Phase 1: Python Project Foundation]
+   ├── Clean package structure (src/ layout)
+   ├── Modern pyproject.toml packaging & dependency specifications
+   ├── Basic environment configuration subsystem (typed settings & validation)
+   ├── .env.example configuration template
+   ├── .gitignore & security hygiene
+   ├── Minimal application entry point (main.py)
+   ├── Minimal smoke & configuration test suite (tests/test_smoke.py)
+   └── Basic README setup and operational documentation
         │
         ▼
-[Phase 2: Persistence Layer & Storage Models]
+[Phase 2: Core Domain Entities & Invariants]
+   ├── Pure Domain Entities & Value Objects (Sport, League, Fixture, Market, Selection, Odds, RiskTier)
+   ├── Strict validation rules & domain invariant enforcement
+   └── Comprehensive unit tests for domain models & invariants
+        │
+        ▼
+[Phase 3: Persistence Layer & Storage Models]
    ├── SQLite database schema, connection manager, migrations
    ├── Repositories (FixtureRepo, TipRepo, BetslipRepo, SourceMetricRepo)
    └── Integration tests for database operations
         │
         ▼
-[Phase 3: Fixture & Market Ingestion Layer]
+[Phase 4: Fixture & Market Ingestion Layer]
    ├── Abstract Fixture Provider Interface
    ├── Mock Fixture Provider & Real Provider Adapter (API-Football / Odds API)
    ├── Canonical entity normalizer & disambiguation dictionary
    └── Ingestion pipeline tests
         │
         ▼
-[Phase 4: Telegram Tip Ingestion & Parser Subsystem]
+[Phase 5: Telegram Tip Ingestion & Parser Subsystem]
    ├── Monitored channel listener adapter (Telethon / MTProto client interface)
    ├── Tip text & booking code parser (Regex & structured pattern matchers)
    ├── Candidate bet aggregator & signal binder
    └── Parser unit tests with real-world sample corpus
         │
         ▼
-[Phase 5: Deterministic Risk & Bet Construction Engine]
+[Phase 6: Deterministic Risk & Bet Construction Engine]
    ├── Hard constraint validator (kickoff time, anti-correlation, risk ceilings)
    ├── Soft constraint scorer (target odds proximity, league diversity)
    ├── Combinatorial / Knapsack betslip builder
@@ -608,14 +618,14 @@ Development strictly proceeds one phase at a time. Each phase requires:
    └── Comprehensive test suite for all builder permutations
         │
         ▼
-[Phase 6: Settlement, Outcome Tracking & Source Learning Engine]
+[Phase 7: Settlement, Outcome Tracking & Source Learning Engine]
    ├── Result reconciliation service (checking match scores)
    ├── Betslip and leg settlement state machine
    ├── Source reliability & empirical accuracy tracker (hit rate, ROI, Brier score)
    └── Settlement workflow tests
         │
         ▼
-[Phase 7: Telegram Bot Application & Interaction Layer]
+[Phase 8: Telegram Bot Application & Interaction Layer]
    ├── Telegram Bot application wrapper (python-telegram-bot / aiogram)
    ├── Security middleware (whitelist authorization)
    ├── Command handlers (/build, /quickslip, /sources, /history, /explain)
@@ -623,14 +633,14 @@ Development strictly proceeds one phase at a time. Each phase requires:
    └── Presentation formatters (HTML/Markdown betslips, booking codes)
         │
         ▼
-[Phase 8: End-to-End Integration, Resilience & System Hardening]
+[Phase 9: End-to-End Integration, Resilience & System Hardening]
    ├── End-to-end workflow verification across all modules
    ├── Graceful error handling, quarantine logging for unparseable tips
    ├── Operational runbooks and monitoring diagnostics
    └── Full test suite verification
         │
         ▼
-[Phase 9: Genuine Machine Learning & Predictive Modeling (Deferred)]
+[Phase 10: Genuine Machine Learning & Predictive Modeling (Deferred)]
    ├── Historical dataset compilation & feature engineering
    ├── Statistical modeling & out-of-time walk-forward validation
    └── Predictive model integration
@@ -641,7 +651,7 @@ Development strictly proceeds one phase at a time. Each phase requires:
 
 The following features are **explicitly out of scope** during early phases and must not be speculatively built:
 
-1. **Machine Learning / Deep Learning Models:** Deferred until Phase 9 when sufficient historical settled data exists.
+1. **Machine Learning / Deep Learning Models:** Deferred until Phase 10 when sufficient historical settled data exists.
 2. **Automated Real-Money Bet Placement:** Out of scope. System is strictly for decision analysis and betslip generation.
 3. **In-Play / Live Betting Construction:** Out of scope. System strictly handles pre-match, unstarted fixtures.
 4. **Public Multi-User / Web Dashboard:** Out of scope. The interface is exclusively a single-user private Telegram bot.

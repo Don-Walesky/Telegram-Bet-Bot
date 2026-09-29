@@ -23,12 +23,17 @@ class Config:
     bot_token: str | None = None
 
     @classmethod
-    def from_env(cls, env_path: Path | str | None = None) -> "Config":
+    def from_env(
+        cls,
+        env_path: Path | str | None = None,
+        load_dotenv_file: bool = True,
+    ) -> "Config":
         """Load and validate configuration from environment variables and .env file."""
-        if env_path is not None:
-            load_dotenv(dotenv_path=env_path)
-        else:
-            load_dotenv()
+        if load_dotenv_file:
+            if env_path is not None:
+                load_dotenv(dotenv_path=env_path)
+            else:
+                load_dotenv()
 
         raw_env = os.getenv("APP_ENV", "development").strip().lower()
         if raw_env not in VALID_ENVIRONMENTS:

@@ -68,6 +68,52 @@ def test_market_invalid_line_raises(invalid_line: object) -> None:
         Market(name="Over/Under", fixture="FIX-1", line=invalid_line)  # type: ignore[arg-type]
 
 
+@pytest.mark.parametrize(
+    "non_finite_line",
+    [
+        Decimal("NaN"),
+        Decimal("Infinity"),
+        Decimal("-Infinity"),
+        float("nan"),
+        float("inf"),
+        float("-inf"),
+        "nan",
+        "NaN",
+        "inf",
+        "-inf",
+        "Infinity",
+        "-Infinity",
+    ],
+)
+def test_market_non_finite_line_raises(non_finite_line: object) -> None:
+    """Verify non-finite lines (NaN, positive/negative infinity) raise DomainValidationError."""
+    with pytest.raises(DomainValidationError, match="Market line must be a finite number"):
+        Market(name="Over/Under", fixture="FIX-1", line=non_finite_line)  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize(
+    "valid_line, expected_decimal",
+    [
+        (2.5, Decimal("2.5")),
+        ("2.5", Decimal("2.5")),
+        (Decimal("2.5"), Decimal("2.5")),
+        (3, Decimal("3")),
+        (0, Decimal("0")),
+        (0.0, Decimal("0.0")),
+        (-1.5, Decimal("-1.5")),
+        ("-0.5", Decimal("-0.5")),
+        (" 1.75 ", Decimal("1.75")),
+        (Decimal("-2.5"), Decimal("-2.5")),
+    ],
+)
+def test_market_valid_finite_numeric_lines(valid_line: object, expected_decimal: Decimal) -> None:
+    """Verify valid finite lines across int, float, str, and Decimal are accepted."""
+    market = Market(name="Handicap", fixture="FIX-1", line=valid_line)  # type: ignore[arg-type]
+    assert market.line == expected_decimal
+    assert isinstance(market.line, Decimal)
+    assert market.line.is_finite() is True
+
+
 def test_market_value_semantics() -> None:
     """Verify equality and hashing semantics for Market."""
     m1 = Market(name="Both Teams To Score", fixture="FIX-1", line=None)

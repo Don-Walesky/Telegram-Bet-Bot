@@ -19,7 +19,7 @@ class Market:
     Invariants:
     - Non-empty market name.
     - Valid associated fixture identifier.
-    - Numeric line value when specified.
+    - Finite numeric line value when specified (rejects NaN, +/- Infinity).
     """
 
     name: str
@@ -64,6 +64,8 @@ class Market:
                 dec_line = Decimal(str(line).strip())
             except Exception as err:
                 raise DomainValidationError(f"Market line must be numeric, got {line!r}.") from err
+            if not dec_line.is_finite():
+                raise DomainValidationError(f"Market line must be a finite number, got {line!r}.")
             object.__setattr__(self, "line", dec_line)
         else:
             object.__setattr__(self, "line", None)

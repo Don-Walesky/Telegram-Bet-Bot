@@ -57,44 +57,102 @@ def test_odds_invalid_values_raise_invalid_odds_error(invalid_input: object) -> 
         Odds(invalid_input)  # type: ignore[arg-type]
 
 
-def test_odds_value_semantics_and_comparison() -> None:
-    """Verify equality, ordering, and hashing behavior."""
+def test_odds_value_semantics_equality_and_hashing() -> None:
+    """Verify that equivalent numeric representations produce equal Odds objects with equal hashes."""
     o1 = Odds(1.50)
     o2 = Odds("1.5")
-    o3 = Odds(Decimal("1.50"))
+    o3 = Odds("1.50")
+    o4 = Odds(Decimal("1.50"))
+    o5 = Odds(Decimal("1.5"))
+    o_diff = Odds(2.20)
+
+    # Equivalent numeric representations produce equal Odds objects
+    assert o1 == o2 == o3 == o4 == o5
+    assert o1 != o_diff
+
+    # Equal Odds objects have equal hashes
+    assert hash(o1) == hash(o2) == hash(o3) == hash(o4) == hash(o5)
+
+    # Set and dict membership behavior
+    odds_set = {o1, o2, o3, o4, o5, o_diff}
+    assert len(odds_set) == 2
+    assert o1 in odds_set
+    assert o_diff in odds_set
+
+
+def test_odds_does_not_compare_equal_to_raw_primitives() -> None:
+    """Verify Odds does not compare equal to raw primitive values."""
+    o = Odds("1.50")
+
+    # Raw floats, strings, ints, Decimals must NOT be equal to an Odds domain object
+    assert o != 1.5
+    assert not (o == 1.5)
+
+    assert o != "1.50"
+    assert not (o == "1.50")
+
+    assert o != "1.5"
+    assert not (o == "1.5")
+
+    assert o != Decimal("1.50")
+    assert not (o == Decimal("1.50"))
+
+    assert o != Decimal("1.5")
+    assert not (o == Decimal("1.5"))
+
+    assert o != 1
+    assert not (o == 1)
+
+
+def test_odds_invalid_primitive_comparisons_do_not_break_equality() -> None:
+    """Verify invalid primitive comparisons do not break equality semantics or raise exceptions."""
+    o = Odds("1.50")
+
+    assert o != "not_a_number"
+    assert not (o == "not_a_number")
+
+    assert o != ""
+    assert not (o == "")
+
+    assert o != None
+    assert not (o == None)
+
+    assert o != [1.5]
+    assert not (o == [1.5])
+
+    assert o != {"odds": 1.5}
+    assert not (o == {"odds": 1.5})
+
+    assert o != object()
+    assert not (o == object())
+
+
+def test_odds_ordering_and_comparison() -> None:
+    """Verify comparison ordering between Odds instances."""
+    o1 = Odds(1.50)
+    o2 = Odds("1.5")
     o4 = Odds(2.20)
 
-    # Cross-representation equality
-    assert o1 == o2
-    assert o2 == o3
-    assert o1 != o4
-
-    # Direct numeric comparison with Odds instance
-    assert o1 == 1.5
-    assert o1 == "1.50"
-    assert o1 == Decimal("1.5")
-    assert o1 != "not_a_number"
-
-    # Ordering
     assert o1 < o4
     assert o1 <= o2
     assert o4 > o1
     assert o4 >= o4
     assert not (o4 < o1)
 
-    # Hash and set membership
-    assert hash(o1) == hash(o2)
-    assert hash(o2) == hash(o3)
-    odds_set = {o1, o2, o3, o4}
-    assert len(odds_set) == 2
-    assert o1 in odds_set
+    with pytest.raises(TypeError):
+        _ = o1 < 1.5  # type: ignore[operator]
 
 
 def test_odds_bookmaker_implied_probability() -> None:
-    """Verify mathematical calculation of bookmaker implied probability: P = 1 / DecimalOdds.
+    """Verify calculation of bookmaker implied probability: 1 / decimal_odds.
 
-    IMPORTANT: This represents bookmaker implied probability (including bookmaker margin),
-    NOT model or fair probability.
+    Explicit tests:
+    - 1 / 2.00 = 0.5
+    - 1 / 1.25 = 0.8
+    - 1 / 4.00 = 0.25
+
+    IMPORTANT: The result is explicitly bookmaker implied probability (including bookmaker margin),
+    NOT a model or predictive probability.
     """
     even_odds = Odds(2.00)
     assert even_odds.bookmaker_implied_probability == Decimal("0.5")
@@ -102,9 +160,11 @@ def test_odds_bookmaker_implied_probability() -> None:
 
     heavy_fav = Odds(1.25)
     assert heavy_fav.bookmaker_implied_probability == Decimal("0.8")
+    assert heavy_fav.implied_probability == Decimal("0.8")
 
     long_shot = Odds(4.00)
     assert long_shot.bookmaker_implied_probability == Decimal("0.25")
+    assert long_shot.implied_probability == Decimal("0.25")
 
     # High precision check: 1 / 3.00 is approximately 0.3333333333333333...
     three_odds = Odds(3.00)

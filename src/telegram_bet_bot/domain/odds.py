@@ -89,11 +89,6 @@ class Odds:
     def __eq__(self, other: object) -> bool:
         if isinstance(other, Odds):
             return self.decimal_value == other.decimal_value
-        if isinstance(other, (int, float, str, Decimal)) and not isinstance(other, bool):
-            try:
-                return self.decimal_value == Decimal(str(other).strip())
-            except (InvalidOperation, ValueError):
-                return False
         return False
 
     def __hash__(self) -> int:

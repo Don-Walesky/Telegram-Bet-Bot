@@ -2,7 +2,7 @@
 
 A personal Telegram sports betting analysis and betslip construction bot built in Python.
 
-> **Important:** This is a **private repository for personal use**. It is an analytical decision-support and workflow automation tool, **not** an automated real-money gambling agent or guaranteed prediction system.
+> **Important:** This is a **public repository intended for personal and authorized use** (not a public multi-tenant SaaS). It is an analytical decision-support and workflow automation tool, **not** an automated real-money gambling agent or guaranteed prediction system.
 
 ---
 
@@ -14,6 +14,15 @@ The primary purpose of **Telegram Bet Bot** is to provide a disciplined, determi
 
 ## Current Development Status
 
+- **Phase 2: Core Domain Entities & Invariants (Completed)**
+  - Pure domain entities and value objects (`Sport`, `League`, `Fixture`, `Market`, `Selection`, `Odds`, `RiskTier`)
+  - Strict domain invariant validation and immutability enforcement
+  - Value semantics, explicit equality, and consistent hashing for domain models
+  - Standardized decimal odds with mathematical bookmaker implied probability calculation ($P_{\text{implied}} = \frac{1}{\text{Decimal Odds}}$)
+  - Hardened market line validation rejecting non-finite values (NaN, positive/negative infinity)
+  - Domain isolation with zero external library or database dependencies
+  - Comprehensive unit test suite covering validation, boundaries, and value semantics
+
 - **Phase 1: Python Project Foundation (Completed)**
   - Clean `src/` layout (`telegram_bet_bot`)
   - Modern project packaging (`pyproject.toml`)
@@ -22,7 +31,7 @@ The primary purpose of **Telegram Bet Bot** is to provide a disciplined, determi
   - Minimal smoke test suite (`tests/test_smoke.py`)
   - Strict Git hygiene (protecting secrets and local artifacts)
 
-Subsequent phases (domain modeling, persistence, fixture ingestion, risk engine, and Telegram integration) are planned and documented in [`docs/DEVELOPMENT_BIBLE.md`](docs/DEVELOPMENT_BIBLE.md).
+Subsequent phases (persistence, fixture ingestion, risk engine, and Telegram integration) are planned and documented in [`docs/DEVELOPMENT_BIBLE.md`](docs/DEVELOPMENT_BIBLE.md).
 
 ---
 

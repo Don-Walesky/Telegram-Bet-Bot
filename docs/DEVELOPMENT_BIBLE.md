@@ -2,7 +2,7 @@
 
 **Project:** Personal Telegram Sports Betting Analysis & Bet Construction Bot  
 **Status: Phase 2 — Core Domain Entities & Invariants — Completed**  
-**Repository Access:** Private / Personal Use  
+**Repository Access:** Public Repository / Personal & Authorized Use  
 **Target Runtime:** Python 3.11+  
 
 ---

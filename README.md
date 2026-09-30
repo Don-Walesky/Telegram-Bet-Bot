@@ -14,6 +14,17 @@ The primary purpose of **Telegram Bet Bot** is to provide a disciplined, determi
 
 ## Current Development Status
 
+- **Phase 3: Persistence Layer & Storage Models (Completed)**
+  - Clean, SQLite-backed persistence foundation using Python standard library `sqlite3` (no ORM or external database dependencies)
+  - Explicit database schema with primary keys, composite foreign keys, unique constraints, and check constraints
+  - Enforced referential integrity via runtime `PRAGMA foreign_keys = ON;`
+  - Lossless Decimal storage using canonical string representations (`Market.line`, `Odds.decimal_value`)
+  - Strict timezone-aware UTC ISO-8601 datetime storage and reconstruction rejecting naive datetimes
+  - Clean repository abstractions (`SportRepository`, `LeagueRepository`, `FixtureRepository`, `MarketRepository`, `SelectionRepository`)
+  - Explicit Domain ↕ Persistence translation preventing database implementation details from leaking into domain entities
+  - Transaction safety using context-managed connection boundaries
+  - Isolated test fixtures utilizing temporary SQLite databases with zero persistent artifacts
+
 - **Phase 2: Core Domain Entities & Invariants (Completed)**
   - Pure domain entities and value objects (`Sport`, `League`, `Fixture`, `Market`, `Selection`, `Odds`, `RiskTier`)
   - Strict domain invariant validation and immutability enforcement
@@ -31,7 +42,7 @@ The primary purpose of **Telegram Bet Bot** is to provide a disciplined, determi
   - Minimal smoke test suite (`tests/test_smoke.py`)
   - Strict Git hygiene (protecting secrets and local artifacts)
 
-Subsequent phases (persistence, fixture ingestion, risk engine, and Telegram integration) are planned and documented in [`docs/DEVELOPMENT_BIBLE.md`](docs/DEVELOPMENT_BIBLE.md).
+Subsequent phases (fixture ingestion, risk engine, and Telegram integration) are planned and documented in [`docs/DEVELOPMENT_BIBLE.md`](docs/DEVELOPMENT_BIBLE.md).
 
 ---
 

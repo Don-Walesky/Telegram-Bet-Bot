@@ -20,6 +20,7 @@ class Config:
     app_env: str = "development"
     log_level: str = "INFO"
     bot_token: str | None = None
+    db_path: Path = Path("data/telegram_bet_bot.db")
 
     @classmethod
     def from_env(
@@ -55,8 +56,16 @@ class Config:
                 "BOT_TOKEN environment variable is required when APP_ENV is 'production'."
             )
 
+        raw_db_path = os.getenv("DATABASE_PATH")
+        db_path = (
+            Path(raw_db_path.strip())
+            if raw_db_path and raw_db_path.strip()
+            else Path("data/telegram_bet_bot.db")
+        )
+
         return cls(
             app_env=raw_env,
             log_level=raw_log_level,
             bot_token=bot_token,
+            db_path=db_path,
         )

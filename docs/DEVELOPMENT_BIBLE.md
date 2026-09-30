@@ -1,7 +1,7 @@
 # Development Bible & Technical Blueprint
 
 **Project:** Personal Telegram Sports Betting Analysis & Bet Construction Bot  
-**Status: Phase 2 — Core Domain Entities & Invariants — Completed**  
+**Status: Phase 3 — Persistence Layer & Storage Models — Completed**  
 **Repository Access:** Public Repository / Personal & Authorized Use  
 **Target Runtime:** Python 3.11+  
 
@@ -255,8 +255,12 @@ Apply deterministic filtering pipelines:
 
 ### 5.5 Persistence & Data Integrity
 
-- Local relational database (SQLite via structured repository layer) for personal operational simplicity and zero-configuration hosting.
-- Relational schema with strict foreign keys, timestamps, unique constraints, and transaction boundaries.
+- **Database Engine:** Local relational SQLite database via Python's standard-library `sqlite3` module (zero external ORM overhead).
+- **Relational Integrity:** Strict foreign-key constraints enforced on every connection (`PRAGMA foreign_keys = ON;`), unique constraints, and check constraints preventing referential and data anomalies.
+- **Lossless Numeric Storage:** Canonical decimal strings for `Odds.decimal_value` and `Market.line` to guarantee complete immunity against binary floating-point precision loss.
+- **Explicit UTC Temporal Storage:** Timezone-aware datetimes are converted to UTC and stored in canonical ISO-8601 strings; naive datetimes are rejected at the persistence boundary.
+- **Domain/Persistence Isolation:** Repositories map database rows to immutable, pure domain objects (`Sport`, `League`, `Fixture`, `Market`, `Selection`); SQLite rows never leak into the domain core.
+- **Test Database Isolation:** Test suites run exclusively against temporary SQLite databases (`tmp_path`), guaranteeing no shared mutable state or committed database files.
 
 ---
 

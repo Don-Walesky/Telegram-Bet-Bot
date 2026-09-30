@@ -61,15 +61,24 @@ def test_ingest_fixture_bundle_success(
     mock_provider: MockSportsDataProvider,
     sample_bundle: ProviderFixtureBundle,
 ) -> None:
-    """Verify ingest_fixture_bundle persists complete hierarchy atomically."""
+    """Verify ingest_fixture_bundle persists complete hierarchy atomically.
+
+    Proves:
+    1. Provider external IDs are preserved at the provider boundary on the DTO.
+    2. Internal domain IDs are separate from provider external IDs.
+    3. Hierarchy is written and retrievable via repositories.
+    """
     service = FixtureIngestionService(db=test_db, provider=mock_provider)
     result = service.ingest_fixture_bundle(sample_bundle)
 
-    assert result.fixture_id == sample_bundle.fixture.external_id
+    # 1. External ID retained on DTO, decoupled from domain fixture_id
+    assert sample_bundle.fixture.external_id == "ext-fix-100"
+    assert result.fixture_id != sample_bundle.fixture.external_id
+    assert result.fixture_id == "football:champions_league:bayern_munich_vs_real_madrid:20261201"
     assert len(result.markets) == 1
     assert len(result.selections) == 2
 
-    # Verify directly via Phase 3 repositories
+    # 2. Verify directly via Phase 3 repositories
     with test_db.connection() as conn:
         sport_repo = SportRepository(conn)
         league_repo = LeagueRepository(conn)
@@ -78,14 +87,15 @@ def test_ingest_fixture_bundle_success(
         selection_repo = SelectionRepository(conn)
 
         assert sport_repo.exists("football")
-        assert league_repo.get_by_identity("ext-league-1") is not None
+        assert league_repo.get_by_identity("football:champions_league") is not None
 
-        retrieved_fix = fixture_repo.get("ext-fix-100")
+        retrieved_fix = fixture_repo.get(result.fixture_id)
         assert retrieved_fix.home_team == "Bayern Munich"
         assert retrieved_fix.away_team == "Real Madrid"
 
-        retrieved_markets = market_repo.list_by_fixture("ext-fix-100")
+        retrieved_markets = market_repo.list_by_fixture(result.fixture_id)
         assert len(retrieved_markets) == 1
+        assert retrieved_markets[0].identity == f"{result.fixture_id}:match_winner"
 
         retrieved_selections = selection_repo.list_by_market(retrieved_markets[0].identity)
         assert len(retrieved_selections) == 2
@@ -100,15 +110,17 @@ def test_ingest_fixture_bundle_idempotent(
     service = FixtureIngestionService(db=test_db, provider=mock_provider)
 
     # Ingest once
-    service.ingest_fixture_bundle(sample_bundle)
+    res1 = service.ingest_fixture_bundle(sample_bundle)
 
     # Ingest twice
-    service.ingest_fixture_bundle(sample_bundle)
+    res2 = service.ingest_fixture_bundle(sample_bundle)
+
+    assert res1.fixture_id == res2.fixture_id
 
     with test_db.connection() as conn:
         fix_repo = FixtureRepository(conn)
         fixtures = fix_repo.list_all()
-        matching = [f for f in fixtures if f.fixture_id == sample_bundle.fixture.external_id]
+        matching = [f for f in fixtures if f.fixture_id == res1.fixture_id]
         assert len(matching) == 1
 
 
@@ -119,7 +131,7 @@ def test_ingest_fixture_bundle_updates_existing_record(
 ) -> None:
     """Verify re-ingesting a bundle with updated kickoff time and odds updates the records."""
     service = FixtureIngestionService(db=test_db, provider=mock_provider)
-    service.ingest_fixture_bundle(sample_bundle)
+    res1 = service.ingest_fixture_bundle(sample_bundle)
 
     # Update kickoff time and selection odds
     new_kickoff = datetime(2026, 12, 1, 21, 0, tzinfo=timezone.utc)
@@ -147,17 +159,18 @@ def test_ingest_fixture_bundle_updates_existing_record(
         selections=[updated_selection, sample_bundle.selections[1]],
     )
 
-    service.ingest_fixture_bundle(updated_bundle)
+    res2 = service.ingest_fixture_bundle(updated_bundle)
+    assert res1.fixture_id == res2.fixture_id
 
     with test_db.connection() as conn:
         fix_repo = FixtureRepository(conn)
         sel_repo = SelectionRepository(conn)
 
-        persisted_fix = fix_repo.get(sample_bundle.fixture.external_id)
+        persisted_fix = fix_repo.get(res1.fixture_id)
         assert persisted_fix.scheduled_start_time == new_kickoff
         assert persisted_fix.status.value == "IN_PLAY"
 
-        persisted_sel = sel_repo.get("ext-sel-100-h")
+        persisted_sel = sel_repo.get(res2.selections[0].identity)
         assert persisted_sel.odds is not None
         assert persisted_sel.odds.decimal_value == Decimal("2.65")
 
@@ -192,12 +205,9 @@ def test_ingest_fixture_bundle_atomic_rollback_on_normalization_failure(
     # Confirm that NOTHING from this fixture was persisted
     with test_db.connection() as conn:
         fix_repo = FixtureRepository(conn)
-        market_repo = MarketRepository(conn)
-        sel_repo = SelectionRepository(conn)
-
-        assert fix_repo.get_by_id(sample_bundle.fixture.external_id) is None
-        assert len(market_repo.list_by_fixture(sample_bundle.fixture.external_id)) == 0
-        assert sel_repo.get_by_identity("bad-sel") is None
+        assert fix_repo.list_all() == []
+        assert conn.execute("SELECT count(*) FROM markets").fetchone()[0] == 0
+        assert conn.execute("SELECT count(*) FROM selections").fetchone()[0] == 0
 
 
 def test_ingest_fixture_bundle_missing_market_reference_raises_and_rolls_back(
@@ -226,7 +236,63 @@ def test_ingest_fixture_bundle_missing_market_reference_raises_and_rolls_back(
         service.ingest_fixture_bundle(bundle)
 
     with test_db.connection() as conn:
-        assert FixtureRepository(conn).get_by_id(sample_bundle.fixture.external_id) is None
+        assert FixtureRepository(conn).list_all() == []
+
+
+# ============================================================================
+# CORRECTION 3 TEST — REAL DATABASE TRANSACTION ROLLBACK
+# ============================================================================
+
+
+def test_ingest_fixture_bundle_real_persistence_rollback_on_database_failure(
+    test_db: Database,
+    mock_provider: MockSportsDataProvider,
+    sample_bundle: ProviderFixtureBundle,
+) -> None:
+    """Test real persistence-layer failure after earlier records have already been written (Correction 3).
+
+    Required behavior:
+    BEGIN TRANSACTION
+      save Sport -> succeeds (written to SQLite)
+      save League -> succeeds (written to SQLite)
+      save Fixture -> succeeds (written to SQLite)
+      save Market -> succeeds (written to SQLite)
+      save Selection -> FAILS (SQLite aborts at persistence time)
+    ROLLBACK
+    After the failure, NONE of the earlier records remain in SQLite.
+    """
+    service = FixtureIngestionService(db=test_db, provider=mock_provider)
+
+    # Attach an explicit SQLite trigger to 'selections' table that forces a failure
+    # at the real SQLite engine level during selection INSERT.
+    with test_db.connection() as conn:
+        conn.execute(
+            """
+            CREATE TRIGGER trigger_fail_selection_insert
+            BEFORE INSERT ON selections
+            BEGIN
+                SELECT RAISE(ABORT, 'Simulated SQLite failure during Selection insertion');
+            END;
+            """
+        )
+
+    # Ingestion successfully normalizes the bundle, executes SQL INSERT for Sport,
+    # League, Fixture, and Market, but FAILS during Selection insertion inside the transaction.
+    with pytest.raises(Exception, match="Simulated SQLite failure during Selection insertion"):
+        service.ingest_fixture_bundle(sample_bundle)
+
+    # Verify that the transaction rolled back completely and NONE of the partially persisted
+    # entities exist in the database.
+    with test_db.connection() as conn:
+        sport_repo = SportRepository(conn)
+        league_repo = LeagueRepository(conn)
+        fixture_repo = FixtureRepository(conn)
+
+        assert not sport_repo.exists("football")
+        assert league_repo.get_by_identity("football:champions_league") is None
+        assert fixture_repo.list_all() == []
+        assert conn.execute("SELECT count(*) FROM markets").fetchone()[0] == 0
+        assert conn.execute("SELECT count(*) FROM selections").fetchone()[0] == 0
 
 
 def test_ingest_upcoming_fixtures(test_db: Database, mock_provider: MockSportsDataProvider) -> None:

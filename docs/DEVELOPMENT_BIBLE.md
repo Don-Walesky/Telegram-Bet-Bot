@@ -603,9 +603,10 @@ Development strictly proceeds one phase at a time. Each phase requires:
 [Phase 4: Fixture & Market Ingestion Layer]
    ├── Abstract SportsDataProvider Protocol & Provider DTO boundary
    ├── MockSportsDataProvider with deterministic multi-sport synthetic data
-   ├── ProviderDataNormalizer converting provider DTOs into pure Phase 2 domain entities
+   ├── ProviderIdentityMapper separating provider external IDs from canonical internal domain identities
+   ├── ProviderDataNormalizer with strict provider sport and league relationship validation
    ├── FixtureIngestionService coordinating transactional ingestion and idempotent upserts
-   └── Comprehensive test suite covering normalization, failure modes, atomicity, and integration
+   └── Comprehensive test suite covering normalization, failure modes, real database rollback, and integration
         │
         ▼
 [Phase 5: Telegram Tip Ingestion & Parser Subsystem]

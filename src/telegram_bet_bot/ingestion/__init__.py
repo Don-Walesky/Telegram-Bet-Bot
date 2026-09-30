@@ -16,7 +16,10 @@ from telegram_bet_bot.ingestion.models import (
     ProviderSelection,
     ProviderSport,
 )
-from telegram_bet_bot.ingestion.normalizer import ProviderDataNormalizer
+from telegram_bet_bot.ingestion.normalizer import (
+    ProviderDataNormalizer,
+    ProviderIdentityMapper,
+)
 from telegram_bet_bot.ingestion.provider import SportsDataProvider
 from telegram_bet_bot.ingestion.service import (
     FixtureIngestionService,
@@ -36,6 +39,7 @@ __all__ = [
     "ProviderError",
     "ProviderFixture",
     "ProviderFixtureBundle",
+    "ProviderIdentityMapper",
     "ProviderLeague",
     "ProviderMarket",
     "ProviderSelection",

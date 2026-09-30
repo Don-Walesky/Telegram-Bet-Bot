@@ -40,14 +40,16 @@ def test_end_to_end_ingestion_pipeline(test_db: Database) -> None:
         assert basketball.name == "basketball"
         assert tennis.name == "tennis"
 
-        # B. Verify League
-        epl = league_repo.get("league-epl-01")
+        # B. Verify League (canonical internal domain identity)
+        epl = league_repo.get("football:premier_league")
         assert epl.name == "Premier League"
         assert epl.sport == football
         assert epl.country == "England"
+        assert epl.identity != "league-epl-01"
 
-        # C. Verify Fixture
-        fixture = fixture_repo.get("fix-fb-epl-001")
+        # C. Verify Fixture (canonical internal domain identity)
+        expected_fix_id = "football:premier_league:arsenal_vs_chelsea:20261120"
+        fixture = fixture_repo.get(expected_fix_id)
         assert fixture.sport == football
         assert fixture.league == epl
         assert fixture.home_team == "Arsenal"
@@ -55,12 +57,15 @@ def test_end_to_end_ingestion_pipeline(test_db: Database) -> None:
         assert fixture.scheduled_start_time.tzinfo is not None
         assert fixture.status == FixtureStatus.SCHEDULED
         assert fixture.is_unstarted is True
+        assert fixture.fixture_id != "fix-fb-epl-001"
 
         # D. Verify Market with Decimal Line
-        markets = market_repo.list_by_fixture("fix-fb-epl-001")
+        markets = market_repo.list_by_fixture(expected_fix_id)
         assert len(markets) == 2
         ou_market = next(m for m in markets if m.name == "Total Goals")
         assert ou_market.line == Decimal("2.5")
+        assert ou_market.identity != "mkt-fb-epl-001-ou25"
+        assert ou_market.identity == f"{expected_fix_id}:total_goals:2.5"
 
         # E. Verify Selection with Decimal Odds
         selections = selection_repo.list_by_market(ou_market.identity)
@@ -69,6 +74,8 @@ def test_end_to_end_ingestion_pipeline(test_db: Database) -> None:
         assert over_sel.odds is not None
         assert over_sel.odds.decimal_value == Decimal("1.80")
         assert over_sel.odds.implied_probability == Decimal("1") / Decimal("1.80")
+        assert over_sel.identity != "sel-fb-epl-001-o25"
+        assert over_sel.identity == f"{ou_market.identity}:over_2.5"
 
 
 def test_sport_filtered_ingestion_pipeline(test_db: Database) -> None:
@@ -85,3 +92,4 @@ def test_sport_filtered_ingestion_pipeline(test_db: Database) -> None:
         assert len(fixtures) == 1
         assert fixtures[0].sport.name == "basketball"
         assert fixtures[0].home_team == "Los Angeles Lakers"
+        assert fixtures[0].fixture_id == "basketball:nba:los_angeles_lakers_vs_boston_celtics:20261122"

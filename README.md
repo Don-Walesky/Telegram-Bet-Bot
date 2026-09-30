@@ -14,6 +14,16 @@ The primary purpose of **Telegram Bet Bot** is to provide a disciplined, determi
 
 ## Current Development Status
 
+- **Phase 4: Fixture & Market Ingestion Layer (Completed)**
+  - Abstract `SportsDataProvider` protocol defining standard data ingestion contracts
+  - Provider DTO boundary (`ProviderSport`, `ProviderLeague`, `ProviderFixture`, `ProviderMarket`, `ProviderSelection`, `ProviderFixtureBundle`)
+  - Deterministic `MockSportsDataProvider` supplying multi-sport synthetic fixture and market data without predictive bias
+  - Strict `ProviderDataNormalizer` adapting external provider DTOs into pure Phase 2 domain entities
+  - `FixtureIngestionService` coordinating transactional batch and single-bundle ingestion
+  - Idempotent upsert persistence preventing duplicate records across ingestion runs
+  - Atomic transaction rollback preventing partial writes upon normalization or provider failure
+  - Comprehensive unit and integration test suite with temporary SQLite database isolation
+
 - **Phase 3: Persistence Layer & Storage Models (Completed)**
   - Clean, SQLite-backed persistence foundation using Python standard library `sqlite3` (no ORM or external database dependencies)
   - Explicit database schema with primary keys, composite foreign keys, unique constraints, and check constraints
@@ -42,7 +52,7 @@ The primary purpose of **Telegram Bet Bot** is to provide a disciplined, determi
   - Minimal smoke test suite (`tests/test_smoke.py`)
   - Strict Git hygiene (protecting secrets and local artifacts)
 
-Subsequent phases (fixture ingestion, risk engine, and Telegram integration) are planned and documented in [`docs/DEVELOPMENT_BIBLE.md`](docs/DEVELOPMENT_BIBLE.md).
+Subsequent phases (telegram tip ingestion, risk engine, settlement, and Telegram bot application) are planned and documented in [`docs/DEVELOPMENT_BIBLE.md`](docs/DEVELOPMENT_BIBLE.md).
 
 ---
 

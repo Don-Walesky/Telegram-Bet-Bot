@@ -1,7 +1,7 @@
 # Development Bible & Technical Blueprint
 
 **Project:** Personal Telegram Sports Betting Analysis & Bet Construction Bot  
-**Status: Phase 3 — Persistence Layer & Storage Models — Completed**  
+**Status: Phase 4 — Fixture & Market Ingestion Layer — Completed**  
 **Repository Access:** Public Repository / Personal & Authorized Use  
 **Target Runtime:** Python 3.11+  
 
@@ -601,10 +601,11 @@ Development strictly proceeds one phase at a time. Each phase requires:
         │
         ▼
 [Phase 4: Fixture & Market Ingestion Layer]
-   ├── Abstract Fixture Provider Interface
-   ├── Mock Fixture Provider & Real Provider Adapter (API-Football / Odds API)
-   ├── Canonical entity normalizer & disambiguation dictionary
-   └── Ingestion pipeline tests
+   ├── Abstract SportsDataProvider Protocol & Provider DTO boundary
+   ├── MockSportsDataProvider with deterministic multi-sport synthetic data
+   ├── ProviderDataNormalizer converting provider DTOs into pure Phase 2 domain entities
+   ├── FixtureIngestionService coordinating transactional ingestion and idempotent upserts
+   └── Comprehensive test suite covering normalization, failure modes, atomicity, and integration
         │
         ▼
 [Phase 5: Telegram Tip Ingestion & Parser Subsystem]

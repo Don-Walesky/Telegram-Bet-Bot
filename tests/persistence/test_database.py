@@ -4,8 +4,14 @@ from pathlib import Path
 import sqlite3
 import pytest
 
+from telegram_bet_bot.domain import Fixture, League, Sport
 from telegram_bet_bot.persistence import Database, initialize_database
 from telegram_bet_bot.persistence.exceptions import DatabaseInitializationError
+from telegram_bet_bot.persistence.repositories import (
+    FixtureRepository,
+    LeagueRepository,
+    SportRepository,
+)
 
 
 def test_database_initialization_creates_tables(test_db: Database, test_conn: sqlite3.Connection) -> None:
@@ -100,3 +106,70 @@ def test_parent_directory_creation_for_database(tmp_path: Path) -> None:
 
     assert nested_path.exists()
     assert nested_path.is_file()
+
+
+def test_multi_repository_transaction_atomic_rollback(
+    test_db: Database,
+    sample_sport: Sport,
+    sample_league: League,
+    sample_fixture: Fixture,
+) -> None:
+    """Verify multi-repository atomic transaction rollback:
+
+    BEGIN TRANSACTION -> save Sport -> save League -> save Fixture -> force error -> ROLLBACK.
+    Confirms that Sport, League, and Fixture are all completely rolled back and do not exist.
+    """
+    with test_db.connection() as conn:
+        sport_repo = SportRepository(conn)
+        league_repo = LeagueRepository(conn)
+        fixture_repo = FixtureRepository(conn)
+
+        with pytest.raises(RuntimeError, match="Forced error inside transaction"):
+            with test_db.transaction(conn):
+                sport_repo.save(sample_sport)
+                league_repo.save(sample_league)
+                fixture_repo.save(sample_fixture)
+                raise RuntimeError("Forced error inside transaction")
+
+        # Verify on this connection that no entity exists
+        assert sport_repo.get_by_identity(sample_sport.name) is None
+        assert league_repo.get_by_identity(sample_league.identity) is None
+        assert fixture_repo.get_by_id(sample_fixture.fixture_id) is None
+
+    # Verify on a completely fresh connection that no entity was committed to disk
+    with test_db.connection() as fresh_conn:
+        assert SportRepository(fresh_conn).get_by_identity(sample_sport.name) is None
+        assert LeagueRepository(fresh_conn).get_by_identity(sample_league.identity) is None
+        assert FixtureRepository(fresh_conn).get_by_id(sample_fixture.fixture_id) is None
+
+
+def test_multi_repository_transaction_atomic_commit(
+    test_db: Database,
+    sample_sport: Sport,
+    sample_league: League,
+    sample_fixture: Fixture,
+) -> None:
+    """Verify multi-repository atomic transaction commit:
+
+    BEGIN TRANSACTION -> save Sport -> save League -> save Fixture -> COMMIT.
+    Confirms all entities are persisted atomically and retrievable across connections.
+    """
+    with test_db.connection() as conn:
+        sport_repo = SportRepository(conn)
+        league_repo = LeagueRepository(conn)
+        fixture_repo = FixtureRepository(conn)
+
+        with test_db.transaction(conn):
+            sport_repo.save(sample_sport)
+            league_repo.save(sample_league)
+            fixture_repo.save(sample_fixture)
+
+        assert sport_repo.get_by_identity(sample_sport.name) is not None
+        assert league_repo.get_by_identity(sample_league.identity) is not None
+        assert fixture_repo.get_by_id(sample_fixture.fixture_id) is not None
+
+    # Verify on a fresh connection that all entities were persisted to the database
+    with test_db.connection() as fresh_conn:
+        assert SportRepository(fresh_conn).get_by_identity(sample_sport.name) == sample_sport
+        assert LeagueRepository(fresh_conn).get_by_identity(sample_league.identity) == sample_league
+        assert FixtureRepository(fresh_conn).get_by_id(sample_fixture.fixture_id) == sample_fixture

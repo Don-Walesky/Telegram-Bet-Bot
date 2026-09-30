@@ -33,17 +33,16 @@ class MarketRepository(BaseRepository):
             line = excluded.line;
         """
         try:
-            with self.connection:
-                self.connection.execute(
-                    query,
-                    (
-                        market.identity,
-                        market.name,
-                        market.fixture_id,
-                        market.market_id,
-                        line_str,
-                    ),
-                )
+            self.connection.execute(
+                query,
+                (
+                    market.identity,
+                    market.name,
+                    market.fixture_id,
+                    market.market_id,
+                    line_str,
+                ),
+            )
         except sqlite3.IntegrityError as err:
             handle_integrity_error(err, "Market", market.identity)
 
@@ -60,17 +59,16 @@ class MarketRepository(BaseRepository):
         VALUES (?, ?, ?, ?, ?);
         """
         try:
-            with self.connection:
-                self.connection.execute(
-                    query,
-                    (
-                        market.identity,
-                        market.name,
-                        market.fixture_id,
-                        market.market_id,
-                        line_str,
-                    ),
-                )
+            self.connection.execute(
+                query,
+                (
+                    market.identity,
+                    market.name,
+                    market.fixture_id,
+                    market.market_id,
+                    line_str,
+                ),
+            )
         except sqlite3.IntegrityError as err:
             handle_integrity_error(err, "Market", market.identity)
 
@@ -123,9 +121,8 @@ class MarketRepository(BaseRepository):
         """
         query = "DELETE FROM markets WHERE identity = ?;"
         try:
-            with self.connection:
-                cursor = self.connection.execute(query, (identity.strip(),))
-                return cursor.rowcount > 0
+            cursor = self.connection.execute(query, (identity.strip(),))
+            return cursor.rowcount > 0
         except sqlite3.IntegrityError as err:
             handle_integrity_error(err, "Market", identity)
             return False

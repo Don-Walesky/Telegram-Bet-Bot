@@ -29,17 +29,16 @@ class LeagueRepository(BaseRepository):
             league_id = excluded.league_id;
         """
         try:
-            with self.connection:
-                self.connection.execute(
-                    query,
-                    (
-                        league.identity,
-                        league.name,
-                        league.sport.name,
-                        league.country,
-                        league.league_id,
-                    ),
-                )
+            self.connection.execute(
+                query,
+                (
+                    league.identity,
+                    league.name,
+                    league.sport.name,
+                    league.country,
+                    league.league_id,
+                ),
+            )
         except sqlite3.IntegrityError as err:
             handle_integrity_error(err, "League", league.identity)
 
@@ -55,17 +54,16 @@ class LeagueRepository(BaseRepository):
         VALUES (?, ?, ?, ?, ?);
         """
         try:
-            with self.connection:
-                self.connection.execute(
-                    query,
-                    (
-                        league.identity,
-                        league.name,
-                        league.sport.name,
-                        league.country,
-                        league.league_id,
-                    ),
-                )
+            self.connection.execute(
+                query,
+                (
+                    league.identity,
+                    league.name,
+                    league.sport.name,
+                    league.country,
+                    league.league_id,
+                ),
+            )
         except sqlite3.IntegrityError as err:
             handle_integrity_error(err, "League", league.identity)
 
@@ -150,9 +148,8 @@ class LeagueRepository(BaseRepository):
         """
         query = "DELETE FROM leagues WHERE identity = ?;"
         try:
-            with self.connection:
-                cursor = self.connection.execute(query, (identity.strip(),))
-                return cursor.rowcount > 0
+            cursor = self.connection.execute(query, (identity.strip(),))
+            return cursor.rowcount > 0
         except sqlite3.IntegrityError as err:
             handle_integrity_error(err, "League", identity)
             return False

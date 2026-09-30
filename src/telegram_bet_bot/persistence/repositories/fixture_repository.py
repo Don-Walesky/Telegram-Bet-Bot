@@ -28,10 +28,23 @@ class FixtureRepository(BaseRepository):
         return dt.astimezone(timezone.utc).isoformat()
 
     def _deserialize_start_time(self, raw_str: str) -> datetime:
-        """Reconstruct a timezone-aware UTC datetime from an ISO-8601 string."""
-        dt = datetime.fromisoformat(raw_str)
-        if dt.tzinfo is None:
-            dt = dt.replace(tzinfo=timezone.utc)
+        """Reconstruct a timezone-aware UTC datetime from an ISO-8601 string.
+
+        Raises:
+            PersistenceError: If the stored timestamp is naive or cannot be parsed.
+        """
+        try:
+            dt = datetime.fromisoformat(raw_str)
+        except (ValueError, TypeError) as err:
+            raise PersistenceError(
+                f"Malformed timestamp stored in database: '{raw_str}' cannot be parsed as ISO-8601 datetime."
+            ) from err
+
+        if dt.tzinfo is None or dt.tzinfo.utcoffset(dt) is None:
+            raise PersistenceError(
+                f"Corrupted database record: stored timestamp '{raw_str}' is naive (lacks timezone offset). "
+                "The persistence boundary strictly rejects naive timestamps."
+            )
         return dt.astimezone(timezone.utc)
 
     def save(self, fixture: Fixture) -> None:
@@ -57,19 +70,18 @@ class FixtureRepository(BaseRepository):
             status = excluded.status;
         """
         try:
-            with self.connection:
-                self.connection.execute(
-                    query,
-                    (
-                        fixture.fixture_id,
-                        fixture.sport.name,
-                        fixture.league.identity,
-                        fixture.home_team,
-                        fixture.away_team,
-                        start_time_str,
-                        fixture.status.value,
-                    ),
-                )
+            self.connection.execute(
+                query,
+                (
+                    fixture.fixture_id,
+                    fixture.sport.name,
+                    fixture.league.identity,
+                    fixture.home_team,
+                    fixture.away_team,
+                    start_time_str,
+                    fixture.status.value,
+                ),
+            )
         except sqlite3.IntegrityError as err:
             handle_integrity_error(err, "Fixture", fixture.fixture_id)
 
@@ -90,19 +102,18 @@ class FixtureRepository(BaseRepository):
         VALUES (?, ?, ?, ?, ?, ?, ?);
         """
         try:
-            with self.connection:
-                self.connection.execute(
-                    query,
-                    (
-                        fixture.fixture_id,
-                        fixture.sport.name,
-                        fixture.league.identity,
-                        fixture.home_team,
-                        fixture.away_team,
-                        start_time_str,
-                        fixture.status.value,
-                    ),
-                )
+            self.connection.execute(
+                query,
+                (
+                    fixture.fixture_id,
+                    fixture.sport.name,
+                    fixture.league.identity,
+                    fixture.home_team,
+                    fixture.away_team,
+                    start_time_str,
+                    fixture.status.value,
+                ),
+            )
         except sqlite3.IntegrityError as err:
             handle_integrity_error(err, "Fixture", fixture.fixture_id)
 
@@ -225,9 +236,8 @@ class FixtureRepository(BaseRepository):
         """
         query = "DELETE FROM fixtures WHERE fixture_id = ?;"
         try:
-            with self.connection:
-                cursor = self.connection.execute(query, (fixture_id.strip(),))
-                return cursor.rowcount > 0
+            cursor = self.connection.execute(query, (fixture_id.strip(),))
+            return cursor.rowcount > 0
         except sqlite3.IntegrityError as err:
             handle_integrity_error(err, "Fixture", fixture_id)
             return False

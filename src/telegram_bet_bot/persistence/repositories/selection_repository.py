@@ -33,17 +33,16 @@ class SelectionRepository(BaseRepository):
             odds = excluded.odds;
         """
         try:
-            with self.connection:
-                self.connection.execute(
-                    query,
-                    (
-                        selection.identity,
-                        selection.name,
-                        selection.market.identity,
-                        selection.selection_id,
-                        odds_str,
-                    ),
-                )
+            self.connection.execute(
+                query,
+                (
+                    selection.identity,
+                    selection.name,
+                    selection.market.identity,
+                    selection.selection_id,
+                    odds_str,
+                ),
+            )
         except sqlite3.IntegrityError as err:
             handle_integrity_error(err, "Selection", selection.identity)
 
@@ -60,17 +59,16 @@ class SelectionRepository(BaseRepository):
         VALUES (?, ?, ?, ?, ?);
         """
         try:
-            with self.connection:
-                self.connection.execute(
-                    query,
-                    (
-                        selection.identity,
-                        selection.name,
-                        selection.market.identity,
-                        selection.selection_id,
-                        odds_str,
-                    ),
-                )
+            self.connection.execute(
+                query,
+                (
+                    selection.identity,
+                    selection.name,
+                    selection.market.identity,
+                    selection.selection_id,
+                    odds_str,
+                ),
+            )
         except sqlite3.IntegrityError as err:
             handle_integrity_error(err, "Selection", selection.identity)
 
@@ -135,9 +133,8 @@ class SelectionRepository(BaseRepository):
         """
         query = "DELETE FROM selections WHERE identity = ?;"
         try:
-            with self.connection:
-                cursor = self.connection.execute(query, (identity.strip(),))
-                return cursor.rowcount > 0
+            cursor = self.connection.execute(query, (identity.strip(),))
+            return cursor.rowcount > 0
         except sqlite3.IntegrityError as err:
             handle_integrity_error(err, "Selection", identity)
             return False

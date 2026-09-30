@@ -112,6 +112,46 @@ def test_fixture_naive_datetime_rejected_at_persistence_boundary(
         fixture_repo.save(raw_fix)
 
 
+def test_corrupted_database_naive_timestamp_rejected_on_read(
+    test_conn: sqlite3.Connection,
+    sample_sport: Sport,
+    sample_league: League,
+) -> None:
+    """Verify corrupted database records with naive timestamps are rejected when read.
+
+    Deliberately inserts a naive ISO-8601 timestamp string directly into the fixtures table
+    (bypassing repository write validation) and confirms FixtureRepository raises PersistenceError.
+    """
+    _seed_sport_and_league(test_conn, sample_sport, sample_league)
+    fixture_repo = FixtureRepository(test_conn)
+
+    # Insert a corrupted row with a naive timestamp (no 'Z' or offset like '+00:00')
+    test_conn.execute(
+        """
+        INSERT INTO fixtures (
+            fixture_id, sport_name, league_identity,
+            home_team, away_team, scheduled_start_time, status
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?);
+        """,
+        (
+            "FIX-CORRUPT-TS",
+            sample_sport.name,
+            sample_league.identity,
+            "Arsenal",
+            "Chelsea",
+            "2026-10-15T15:00:00",
+            "SCHEDULED",
+        ),
+    )
+
+    with pytest.raises(PersistenceError, match="naive"):
+        fixture_repo.get("FIX-CORRUPT-TS")
+
+    with pytest.raises(PersistenceError, match="naive"):
+        fixture_repo.get_by_id("FIX-CORRUPT-TS")
+
+
 @pytest.mark.parametrize(
     "status, expected_unstarted",
     [

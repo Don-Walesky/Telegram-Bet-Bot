@@ -345,7 +345,7 @@ The system follows a strict layered architecture with dependency inversion:
                                     |                       |
 +-------------------------------------------------------------------------------+
 |                         5. INFRASTRUCTURE & ADAPTERS                          |
-|   - Database Repositories (SQLite via SQLAlchemy / Core persistence)          |
+|   - Database Repositories (SQLite via Python sqlite3 standard library)        |
 |   - Telegram Channel Scraper Adapter (Telethon / Client)                      |
 |   - External Fixture & Odds API Adapters                                      |
 |   - External Results & Settlement Providers                                   |
@@ -595,8 +595,8 @@ Development strictly proceeds one phase at a time. Each phase requires:
         │
         ▼
 [Phase 3: Persistence Layer & Storage Models]
-   ├── SQLite database schema, connection manager, migrations
-   ├── Repositories (FixtureRepo, TipRepo, BetslipRepo, SourceMetricRepo)
+   ├── SQLite database schema and connection management
+   ├── Repositories (SportRepository, LeagueRepository, FixtureRepository, MarketRepository, SelectionRepository)
    └── Integration tests for database operations
         │
         ▼

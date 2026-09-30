@@ -21,8 +21,7 @@ class SportRepository(BaseRepository):
             name = excluded.name;
         """
         try:
-            with self.connection:
-                self.connection.execute(query, (sport.name, sport.name))
+            self.connection.execute(query, (sport.name, sport.name))
         except sqlite3.IntegrityError as err:
             handle_integrity_error(err, "Sport", sport.name)
 
@@ -34,8 +33,7 @@ class SportRepository(BaseRepository):
         """
         query = "INSERT INTO sports (identity, name) VALUES (?, ?);"
         try:
-            with self.connection:
-                self.connection.execute(query, (sport.name, sport.name))
+            self.connection.execute(query, (sport.name, sport.name))
         except sqlite3.IntegrityError as err:
             handle_integrity_error(err, "Sport", sport.name)
 
@@ -78,9 +76,8 @@ class SportRepository(BaseRepository):
         query = "DELETE FROM sports WHERE identity = ? OR name = ?;"
         normalized = identity.strip().lower()
         try:
-            with self.connection:
-                cursor = self.connection.execute(query, (normalized, normalized))
-                return cursor.rowcount > 0
+            cursor = self.connection.execute(query, (normalized, normalized))
+            return cursor.rowcount > 0
         except sqlite3.IntegrityError as err:
             handle_integrity_error(err, "Sport", identity)
             return False

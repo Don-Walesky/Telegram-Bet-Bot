@@ -10,7 +10,7 @@ from telegram_bet_bot.domain import (
     Selection,
     Sport,
 )
-from telegram_bet_bot.ingestion.exceptions import IngestionError
+from telegram_bet_bot.ingestion.exceptions import IngestionError, NormalizationError
 from telegram_bet_bot.ingestion.models import ProviderFixtureBundle
 from telegram_bet_bot.ingestion.normalizer import ProviderDataNormalizer
 from telegram_bet_bot.ingestion.provider import SportsDataProvider
@@ -19,6 +19,7 @@ from telegram_bet_bot.persistence.repositories import (
     FixtureRepository,
     LeagueRepository,
     MarketRepository,
+    ProviderMappingRepository,
     SelectionRepository,
     SportRepository,
 )
@@ -66,6 +67,18 @@ class FixtureIngestionService:
         self._db = db
         self._provider = provider
         self._normalizer = normalizer or ProviderDataNormalizer()
+        # Bind database to identity mapper if not already bound
+        if self._normalizer.identity_mapper._db is None and self._normalizer.identity_mapper._connection is None:
+            self._normalizer.identity_mapper.set_db(db)
+
+    @property
+    def provider_name(self) -> str:
+        """Return the provider name/identifier from the configured provider."""
+        return getattr(
+            self._provider,
+            "provider_name",
+            getattr(self._provider, "name", "mock_provider"),
+        )
 
     def ingest_sports(self) -> list[Sport]:
         """Fetch, normalize, and persist all sports available from the provider."""
@@ -74,9 +87,17 @@ class FixtureIngestionService:
 
         with self._db.transaction() as conn:
             sport_repo = SportRepository(conn)
+            mapping_repo = ProviderMappingRepository(conn)
             for ps in provider_sports:
                 sport = self._normalizer.normalize_sport(ps)
                 sport_repo.save(sport)
+                if ps.external_id:
+                    mapping_repo.save_mapping(
+                        provider_name=self.provider_name,
+                        entity_type="SPORT",
+                        external_id=ps.external_id,
+                        internal_id=sport.name,
+                    )
                 domain_sports.append(sport)
 
         logger.info("Successfully ingested %d sports from provider.", len(domain_sports))
@@ -90,14 +111,26 @@ class FixtureIngestionService:
         with self._db.transaction() as conn:
             sport_repo = SportRepository(conn)
             league_repo = LeagueRepository(conn)
+            mapping_repo = ProviderMappingRepository(conn)
 
             for pl in provider_leagues:
                 # Ensure parent sport is persisted
                 sport = Sport(pl.sport_name)
                 sport_repo.save(sport)
 
-                league = self._normalizer.normalize_league(pl, sport)
+                league = self._normalizer.normalize_league(
+                    pl,
+                    sport,
+                    provider_name=self.provider_name,
+                )
                 league_repo.save(league)
+                if pl.external_id:
+                    mapping_repo.save_mapping(
+                        provider_name=self.provider_name,
+                        entity_type="LEAGUE",
+                        external_id=pl.external_id,
+                        internal_id=league.identity,
+                    )
                 domain_leagues.append(league)
 
         logger.info("Successfully ingested %d leagues from provider.", len(domain_leagues))
@@ -106,22 +139,47 @@ class FixtureIngestionService:
     def ingest_fixture_bundle(self, bundle: ProviderFixtureBundle) -> IngestionResult:
         """Ingest a complete fixture hierarchy atomically.
 
-        Guarantees that the Sport, League, Fixture, Markets, and Selections
-        are validated and persisted inside a single atomic transaction.
-        If any element fails, the entire transaction rolls back.
+        Guarantees that the Sport, League, Fixture, Markets, Selections,
+        and Provider Identity Mappings are validated and persisted inside
+        a single atomic transaction.
+        If any element fails, the entire transaction rolls back cleanly.
         """
         if not isinstance(bundle, ProviderFixtureBundle):
             raise IngestionError(f"Expected ProviderFixtureBundle, got {type(bundle).__name__}")
 
         # 1. Normalize entire hierarchy first before writing to database
         sport = self._normalizer.normalize_sport(bundle.sport)
-        league = self._normalizer.normalize_league(bundle.league, sport)
-        fixture = self._normalizer.normalize_fixture(bundle.fixture, sport, league)
+        league = self._normalizer.normalize_league(
+            bundle.league,
+            sport,
+            provider_name=self.provider_name,
+        )
+        fixture = self._normalizer.normalize_fixture(
+            bundle.fixture,
+            sport,
+            league,
+            provider_name=self.provider_name,
+        )
 
         markets_by_ext_id: dict[str, Market] = {}
         domain_markets: list[Market] = []
         for pm in bundle.markets:
-            market = self._normalizer.normalize_market(pm, fixture)
+            # Relationship validation: ProviderMarket.fixture_external_id == ProviderFixture.external_id
+            if not pm.fixture_external_id or not isinstance(pm.fixture_external_id, str):
+                raise NormalizationError(
+                    f"Provider market '{pm.name}' must declare a non-empty fixture_external_id."
+                )
+            if pm.fixture_external_id.strip() != bundle.fixture.external_id.strip():
+                raise NormalizationError(
+                    f"Provider market '{pm.name}' references fixture '{pm.fixture_external_id}', "
+                    f"which does not match bundle fixture '{bundle.fixture.external_id}'."
+                )
+            market = self._normalizer.normalize_market(
+                pm,
+                fixture,
+                expected_fixture_external_id=bundle.fixture.external_id,
+                provider_name=self.provider_name,
+            )
             domain_markets.append(market)
             if pm.external_id:
                 markets_by_ext_id[pm.external_id] = market
@@ -136,7 +194,11 @@ class FixtureIngestionService:
                     f"Selection '{ps.name}' references market '{ps.market_external_id}' "
                     f"which was not found in fixture bundle '{bundle.fixture.external_id}'."
                 )
-            selection = self._normalizer.normalize_selection(ps, parent_market)
+            selection = self._normalizer.normalize_selection(
+                ps,
+                parent_market,
+                expected_market_external_id=ps.market_external_id,
+            )
             domain_selections.append(selection)
 
         # 2. Persist in strict hierarchical order inside an atomic transaction
@@ -146,7 +208,9 @@ class FixtureIngestionService:
             fixture_repo = FixtureRepository(conn)
             market_repo = MarketRepository(conn)
             selection_repo = SelectionRepository(conn)
+            mapping_repo = ProviderMappingRepository(conn)
 
+            # Persist domain models
             sport_repo.save(sport)
             league_repo.save(league)
             fixture_repo.save(fixture)
@@ -156,6 +220,49 @@ class FixtureIngestionService:
 
             for s in domain_selections:
                 selection_repo.save(s)
+
+            # Persist durable identity mappings in the SAME atomic transaction
+            if bundle.sport.external_id:
+                mapping_repo.save_mapping(
+                    provider_name=self.provider_name,
+                    entity_type="SPORT",
+                    external_id=bundle.sport.external_id,
+                    internal_id=sport.name,
+                )
+
+            if bundle.league.external_id:
+                mapping_repo.save_mapping(
+                    provider_name=self.provider_name,
+                    entity_type="LEAGUE",
+                    external_id=bundle.league.external_id,
+                    internal_id=league.identity,
+                )
+
+            if bundle.fixture.external_id:
+                mapping_repo.save_mapping(
+                    provider_name=self.provider_name,
+                    entity_type="FIXTURE",
+                    external_id=bundle.fixture.external_id,
+                    internal_id=fixture.fixture_id,
+                )
+
+            for pm, m in zip(bundle.markets, domain_markets):
+                if pm.external_id:
+                    mapping_repo.save_mapping(
+                        provider_name=self.provider_name,
+                        entity_type="MARKET",
+                        external_id=pm.external_id,
+                        internal_id=m.identity,
+                    )
+
+            for ps, s in zip(bundle.selections, domain_selections):
+                if ps.external_id:
+                    mapping_repo.save_mapping(
+                        provider_name=self.provider_name,
+                        entity_type="SELECTION",
+                        external_id=ps.external_id,
+                        internal_id=s.identity,
+                    )
 
         logger.info(
             "Atomically ingested fixture '%s' with %d markets and %d selections.",

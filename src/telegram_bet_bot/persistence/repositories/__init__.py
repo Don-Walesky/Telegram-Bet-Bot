@@ -3,6 +3,9 @@
 from telegram_bet_bot.persistence.repositories.fixture_repository import FixtureRepository
 from telegram_bet_bot.persistence.repositories.league_repository import LeagueRepository
 from telegram_bet_bot.persistence.repositories.market_repository import MarketRepository
+from telegram_bet_bot.persistence.repositories.provider_mapping_repository import (
+    ProviderMappingRepository,
+)
 from telegram_bet_bot.persistence.repositories.selection_repository import (
     SelectionRepository,
 )
@@ -14,4 +17,5 @@ __all__ = [
     "FixtureRepository",
     "MarketRepository",
     "SelectionRepository",
+    "ProviderMappingRepository",
 ]

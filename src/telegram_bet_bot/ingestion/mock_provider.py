@@ -30,7 +30,10 @@ class MockSportsDataProvider(SportsDataProvider):
         self,
         simulate_unavailable: bool = False,
         simulate_malformed: bool = False,
+        provider_name: str = "mock_provider",
     ) -> None:
+        self.provider_name = provider_name
+        self.name = provider_name
         self.simulate_unavailable = simulate_unavailable
         self.simulate_malformed = simulate_malformed
         self._bundles: dict[str, ProviderFixtureBundle] = {}

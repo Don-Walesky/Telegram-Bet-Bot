@@ -400,19 +400,53 @@ The system follows a strict layered architecture with dependency inversion:
 
 ### Pipeline A: Tip & Fixture Ingestion Data-Flow
 
-[Telegram Channel Stream] / [Fixture API]
+[Telegram Channel Stream] / [External Sports Data Provider]
                   │
                   ▼
-         [Raw Message / Payload]
+      [Provider DTO Boundary] (ProviderSport, ProviderLeague, ProviderFixture, ProviderMarket, ProviderSelection)
                   │
                   ▼
-         [Regex / NLP Parser]
+   [Relationship Validator] (Validates Market-to-Fixture, Selection-to-Market, League-to-Sport relationships)
                   │
                   ▼
-   [Canonical Entity Normalizer] (Disambiguates teams, leagues, markets)
+  [Durable Identity Mapper] (Maps Provider External IDs <-> Canonical Internal Domain IDs via SQLite)
                   │
                   ▼
-      [Active Candidate Repository]
+   [Domain Entity Normalizer] (Constructs pure immutable domain entities: Sport, League, Fixture, Market, Selection)
+                  │
+                  ▼
+ [Atomic Ingestion Transaction] (Persists Domain Entities & Provider Identity Mappings in a single SQLite transaction)
+                  │
+                  ▼
+      [Active Repository Layer]
+
+#### Phase 4 Fixture & Market Ingestion Architecture (Completed)
+
+1. **Persistent Provider-to-Internal Identity Mapping:**
+   - Provider external IDs are strictly segregated from internal domain identities.
+   - The mapping is stored in SQLite table `provider_identity_mappings` with composite primary key `(provider_name, entity_type, external_id)` and secondary index on `(entity_type, internal_id)`.
+   - Managed by `ProviderMappingRepository` and accessed via `ProviderIdentityMapper`.
+   - Mappings survive application/database restarts and mapper re-instantiation.
+   - Scoped by provider namespace and entity type (`SPORT`, `LEAGUE`, `FIXTURE`, `MARKET`, `SELECTION`), ensuring external ID collisions between different providers are impossible.
+
+2. **Provider Relationship Validation:**
+   - Before normalization or persistence, all relational links in incoming provider payloads are verified.
+   - `ProviderMarket.fixture_external_id == ProviderFixture.external_id` is enforced.
+   - `ProviderSelection.market_external_id == ProviderMarket.external_id` is enforced.
+   - `ProviderLeague.sport_name == Sport.name` is enforced.
+   - Any relationship mismatch or orphaned entity raises `NormalizationError` immediately, preventing partial or invalid records from entering the domain or persistence layers.
+
+3. **Transactional Ingestion & Rollback Guarantees:**
+   - The application/service layer (`FixtureIngestionService`) maintains strict ownership of transaction boundaries (`with db.transaction() as conn:`).
+   - Domain entity writes (`SportRepository`, `LeagueRepository`, `FixtureRepository`, `MarketRepository`, `SelectionRepository`) and identity mapping writes (`ProviderMappingRepository`) execute within the exact same atomic transaction.
+   - Repositories never independently commit transactions.
+   - Any database-level or application-level failure immediately aborts and rolls back the transaction, ensuring that neither domain records nor identity mappings are orphaned or partially persisted.
+
+4. **Idempotency Behaviour:**
+   - Re-ingesting the same provider payload resolves to the established canonical domain IDs without creating duplicate records.
+   - Repositories perform idempotent upsert operations (`INSERT ... ON CONFLICT DO UPDATE`).
+   - If an external ID changes but the entity can be reliably matched, the canonical internal identity is preserved.
+
 
 ### Pipeline B: Betslip Construction Data-Flow
 
@@ -572,12 +606,18 @@ Development strictly proceeds one phase at a time. Each phase requires:
 
 ### Implementation Phases
 
-[Phase 0: Architecture & Documentation]
+- **Phase 1 — Python Project Foundation — COMPLETE**
+- **Phase 2 — Core Domain Entities & Invariants — COMPLETE**
+- **Phase 3 — Persistence Layer & Storage Models — COMPLETE**
+- **Phase 4 — Fixture & Market Ingestion Layer — COMPLETE**
+- **Phase 5 — Telegram Tip Ingestion & Parser Subsystem — NOT STARTED**
+
+[Phase 0: Architecture & Documentation] — COMPLETE
    ├── docs/DEVELOPMENT_BIBLE.md
    └── README.md
         │
         ▼
-[Phase 1: Python Project Foundation]
+[Phase 1: Python Project Foundation] — COMPLETE
    ├── Clean package structure (src/ layout)
    ├── Modern pyproject.toml packaging & dependency specifications
    ├── Basic environment configuration subsystem (typed settings & validation)
@@ -588,28 +628,29 @@ Development strictly proceeds one phase at a time. Each phase requires:
    └── Basic README setup and operational documentation
         │
         ▼
-[Phase 2: Core Domain Entities & Invariants]
+[Phase 2: Core Domain Entities & Invariants] — COMPLETE
    ├── Pure Domain Entities & Value Objects (Sport, League, Fixture, Market, Selection, Odds, RiskTier)
    ├── Strict validation rules & domain invariant enforcement
    └── Comprehensive unit tests for domain models & invariants
         │
         ▼
-[Phase 3: Persistence Layer & Storage Models]
+[Phase 3: Persistence Layer & Storage Models] — COMPLETE
    ├── SQLite database schema and connection management
    ├── Repositories (SportRepository, LeagueRepository, FixtureRepository, MarketRepository, SelectionRepository)
    └── Integration tests for database operations
         │
         ▼
-[Phase 4: Fixture & Market Ingestion Layer]
+[Phase 4: Fixture & Market Ingestion Layer] — COMPLETE
    ├── Abstract SportsDataProvider Protocol & Provider DTO boundary
    ├── MockSportsDataProvider with deterministic multi-sport synthetic data
-   ├── ProviderIdentityMapper separating provider external IDs from canonical internal domain identities
-   ├── ProviderDataNormalizer with strict provider sport and league relationship validation
-   ├── FixtureIngestionService coordinating transactional ingestion and idempotent upserts
+   ├── Persistent ProviderIdentityMapper & ProviderMappingRepository separating provider external IDs from canonical internal domain identities
+   ├── Durable SQLite mapping storage (`provider_identity_mappings`) surviving application and database restarts
+   ├── ProviderDataNormalizer with strict provider market-to-fixture, league-to-sport, and selection-to-market relationship validation
+   ├── FixtureIngestionService coordinating service-owned atomic transactional ingestion and idempotent upserts
    └── Comprehensive test suite covering normalization, failure modes, real database rollback, and integration
         │
         ▼
-[Phase 5: Telegram Tip Ingestion & Parser Subsystem]
+[Phase 5: Telegram Tip Ingestion & Parser Subsystem] — NOT STARTED
    ├── Monitored channel listener adapter (Telethon / MTProto client interface)
    ├── Tip text & booking code parser (Regex & structured pattern matchers)
    ├── Candidate bet aggregator & signal binder

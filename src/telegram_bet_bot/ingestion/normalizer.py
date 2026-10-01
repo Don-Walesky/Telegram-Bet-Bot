@@ -3,6 +3,7 @@
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 import math
+import sqlite3
 from typing import Any
 
 from telegram_bet_bot.domain import (
@@ -23,6 +24,9 @@ from telegram_bet_bot.ingestion.models import (
     ProviderSelection,
     ProviderSport,
 )
+from telegram_bet_bot.persistence.repositories.provider_mapping_repository import (
+    ProviderMappingRepository,
+)
 
 
 class ProviderIdentityMapper:
@@ -31,15 +35,34 @@ class ProviderIdentityMapper:
     Guarantees:
     - Provider external IDs are preserved at the provider boundary on DTOs.
     - Provider external IDs are kept strictly separate from internal canonical domain identities.
-    - Idempotent ingestion is preserved across repeated ingestion runs.
-    - Changing a provider external ID does not silently redefine the internal domain identity
-      unless explicitly mapped.
+    - Durable identity mappings that survive application restarts and new mapper instances.
+    - Mappings scoped by (provider_name, entity_type, external_id).
+    - Idempotent ingestion across repeated ingestion runs.
+    - Changing a provider external ID preserves internal domain identity when the entity can
+      be reliably identified.
+    - Full participation in transaction boundaries owned by the application/service layer.
     """
 
-    def __init__(self) -> None:
-        self._fixture_mappings: dict[str, str] = {}  # external_id -> internal_id
-        self._custom_mappings: dict[str, str] = {}  # explicit overrides: external_id -> internal_id
+    def __init__(
+        self,
+        connection: sqlite3.Connection | None = None,
+        db: Any | None = None,
+    ) -> None:
+        self._connection = connection
+        self._db = db
+        self._custom_mappings: dict[str, str] = {}  # external_id -> internal_id
+        self._fixture_mappings: dict[tuple[str, str], str] = {}  # (provider_name, external_id) -> internal_id
         self._league_external_ids: dict[str, set[str]] = {}  # league_identity -> set of known external_ids
+        self._fixture_external_ids: dict[str, set[str]] = {}  # fixture_id -> set of known external_ids
+        self._cache: dict[tuple[str, str, str], str] = {}  # (provider_name, entity_type, external_id) -> internal_id
+
+    def set_db(self, db: Any) -> None:
+        """Attach a Database instance for persistent mapping queries."""
+        self._db = db
+
+    def set_connection(self, connection: sqlite3.Connection | None) -> None:
+        """Attach an active SQLite connection."""
+        self._connection = connection
 
     def register_fixture_mapping(self, external_id: str, internal_id: str) -> None:
         """Register an explicit custom mapping from an external fixture ID to an internal domain fixture ID."""
@@ -49,20 +72,151 @@ class ProviderIdentityMapper:
             raise ValueError("Internal ID must be a non-empty string.")
         self._custom_mappings[external_id.strip()] = internal_id.strip()
 
-    def record_league_mapping(self, external_id: str | None, league: League) -> None:
+    def get_internal_id(
+        self,
+        provider_name: str,
+        entity_type: str,
+        external_id: str,
+        connection: sqlite3.Connection | None = None,
+    ) -> str | None:
+        """Retrieve the canonical internal ID for a given provider external entity ID."""
+        if not external_id or not isinstance(external_id, str):
+            return None
+        clean_ext = external_id.strip()
+        if not clean_ext:
+            return None
+
+        # 1. Explicit in-memory custom override (fixtures)
+        if clean_ext in self._custom_mappings:
+            return self._custom_mappings[clean_ext]
+
+        p_name = provider_name.strip() if provider_name else "mock_provider"
+        e_type = entity_type.strip().upper() if entity_type else ""
+        cache_key = (p_name, e_type, clean_ext)
+
+        # 2. In-memory cache
+        if cache_key in self._cache:
+            return self._cache[cache_key]
+
+        # 3. Persistent repository lookup
+        conn = connection or self._connection
+        if conn is not None:
+            repo = ProviderMappingRepository(conn)
+            res = repo.get_internal_id(p_name, e_type, clean_ext)
+            if res is not None:
+                self._cache[cache_key] = res
+                if e_type == "LEAGUE":
+                    self._league_external_ids.setdefault(res, set()).add(clean_ext)
+                elif e_type == "FIXTURE":
+                    self._fixture_external_ids.setdefault(res, set()).add(clean_ext)
+                return res
+        elif self._db is not None:
+            with self._db.connection() as db_conn:
+                repo = ProviderMappingRepository(db_conn)
+                res = repo.get_internal_id(p_name, e_type, clean_ext)
+                if res is not None:
+                    self._cache[cache_key] = res
+                    if e_type == "LEAGUE":
+                        self._league_external_ids.setdefault(res, set()).add(clean_ext)
+                    elif e_type == "FIXTURE":
+                        self._fixture_external_ids.setdefault(res, set()).add(clean_ext)
+                    return res
+
+        return None
+
+    def record_mapping(
+        self,
+        provider_name: str,
+        entity_type: str,
+        external_id: str,
+        internal_id: str,
+        connection: sqlite3.Connection | None = None,
+    ) -> None:
+        """Record an identity mapping both in-memory and persistently if connection available."""
+        if not external_id or not isinstance(external_id, str) or not external_id.strip():
+            return
+        if not internal_id or not isinstance(internal_id, str) or not internal_id.strip():
+            return
+
+        clean_ext = external_id.strip()
+        clean_int = internal_id.strip()
+        p_name = provider_name.strip() if provider_name else "mock_provider"
+        e_type = entity_type.strip().upper() if entity_type else ""
+
+        # Update in-memory caches
+        self._cache[(p_name, e_type, clean_ext)] = clean_int
+        if e_type == "LEAGUE":
+            self._league_external_ids.setdefault(clean_int, set()).add(clean_ext)
+        elif e_type == "FIXTURE":
+            self._fixture_mappings[(p_name, clean_ext)] = clean_int
+            self._fixture_external_ids.setdefault(clean_int, set()).add(clean_ext)
+
+        # Write to persistence if connection provided
+        conn = connection or self._connection
+        if conn is not None:
+            repo = ProviderMappingRepository(conn)
+            repo.save_mapping(p_name, e_type, clean_ext, clean_int)
+
+    def record_league_mapping(
+        self,
+        external_id: str | None,
+        league: League,
+        provider_name: str = "mock_provider",
+        connection: sqlite3.Connection | None = None,
+    ) -> None:
         """Record the provider's external league ID associated with a domain League."""
         if external_id and isinstance(external_id, str) and external_id.strip():
-            clean_ext = external_id.strip()
-            self._league_external_ids.setdefault(league.identity, set()).add(clean_ext)
+            self.record_mapping(
+                provider_name=provider_name,
+                entity_type="LEAGUE",
+                external_id=external_id.strip(),
+                internal_id=league.identity,
+                connection=connection,
+            )
 
-    def is_valid_league_reference(self, league_ref: str, league: League) -> bool:
+    def list_external_ids(
+        self,
+        provider_name: str,
+        entity_type: str,
+        internal_id: str,
+        connection: sqlite3.Connection | None = None,
+    ) -> list[str]:
+        """List all external IDs mapped to an internal domain entity."""
+        p_name = provider_name.strip() if provider_name else "mock_provider"
+        e_type = entity_type.strip().upper() if entity_type else ""
+        clean_int = internal_id.strip() if internal_id else ""
+
+        found = set()
+        if e_type == "LEAGUE":
+            found.update(self._league_external_ids.get(clean_int, set()))
+        elif e_type == "FIXTURE":
+            found.update(self._fixture_external_ids.get(clean_int, set()))
+
+        conn = connection or self._connection
+        if conn is not None:
+            repo = ProviderMappingRepository(conn)
+            found.update(repo.list_external_ids(p_name, e_type, clean_int))
+        elif self._db is not None:
+            with self._db.connection() as db_conn:
+                repo = ProviderMappingRepository(db_conn)
+                found.update(repo.list_external_ids(p_name, e_type, clean_int))
+
+        return sorted(found)
+
+    def is_valid_league_reference(
+        self,
+        league_ref: str,
+        league: League,
+        provider_name: str = "mock_provider",
+        connection: sqlite3.Connection | None = None,
+    ) -> bool:
         """Check whether a provider fixture's declared league reference matches the domain League."""
         if not league_ref or not isinstance(league_ref, str):
             return False
         clean_ref = league_ref.strip()
 
         # 1. Match against known external IDs for this league
-        known_ext_ids = self._league_external_ids.get(league.identity, set())
+        known_ext_ids = self.list_external_ids(provider_name, "LEAGUE", league.identity, connection=connection)
         if clean_ref in known_ext_ids:
             return True
 
@@ -92,6 +246,34 @@ class ProviderIdentityMapper:
 
         return False
 
+    def is_valid_fixture_reference(
+        self,
+        fixture_ref: str,
+        fixture: Fixture,
+        provider_name: str = "mock_provider",
+        connection: sqlite3.Connection | None = None,
+    ) -> bool:
+        """Check whether a provider market's declared fixture reference matches the domain Fixture."""
+        if not fixture_ref or not isinstance(fixture_ref, str):
+            return False
+        clean_ref = fixture_ref.strip()
+
+        # 1. Match against known external IDs for this fixture
+        known_ext_ids = self.list_external_ids(provider_name, "FIXTURE", fixture.fixture_id, connection=connection)
+        if clean_ref in known_ext_ids:
+            return True
+
+        # 2. Match against fixture's canonical domain fixture_id
+        if clean_ref == fixture.fixture_id:
+            return True
+
+        # 3. Check persistent mapping directly
+        mapped_internal = self.get_internal_id(provider_name, "FIXTURE", clean_ref, connection=connection)
+        if mapped_internal is not None and mapped_internal == fixture.fixture_id:
+            return True
+
+        return False
+
     def resolve_fixture_id(
         self,
         external_id: str,
@@ -99,33 +281,50 @@ class ProviderIdentityMapper:
         home_team: str,
         away_team: str,
         start_time: datetime,
+        provider_name: str = "mock_provider",
+        connection: sqlite3.Connection | None = None,
     ) -> str:
         """Resolve a provider fixture's identity to a canonical internal domain fixture ID.
 
         Resolution order:
         1. Explicit custom mapping, if registered.
-        2. Previously resolved internal ID for this external_id (preserves identity across kickoff changes).
-        3. Deterministic canonical domain identity derived from domain attributes:
+        2. Persistent identity mapping in database (survives restarts and preserves identity across kickoff updates).
+        3. In-memory resolved mapping for this external_id.
+        4. Deterministic canonical domain identity derived from domain attributes:
            f"{league.identity}:{home_slug}_vs_{away_slug}:{date_slug}".
+        5. If provider changed external ID, reuse canonical domain identity if match is unambiguous.
         """
         clean_ext = external_id.strip() if external_id and isinstance(external_id, str) else ""
 
+        # 1. Explicit override
         if clean_ext and clean_ext in self._custom_mappings:
             return self._custom_mappings[clean_ext]
 
-        if clean_ext and clean_ext in self._fixture_mappings:
-            return self._fixture_mappings[clean_ext]
+        p_name = provider_name.strip() if provider_name else "mock_provider"
 
-        # Natural canonical domain identity
+        # 2. Persistent mapping in database
+        if clean_ext:
+            persisted_id = self.get_internal_id(p_name, "FIXTURE", clean_ext, connection=connection)
+            if persisted_id:
+                return persisted_id
+
+        # 3. In-memory mapping
+        if clean_ext and (p_name, clean_ext) in self._fixture_mappings:
+            return self._fixture_mappings[(p_name, clean_ext)]
+
+        # 4. Natural canonical domain identity
         home_slug = home_team.strip().lower().replace(" ", "_")
         away_slug = away_team.strip().lower().replace(" ", "_")
         date_slug = start_time.astimezone(timezone.utc).strftime("%Y%m%d")
-        internal_id = f"{league.identity}:{home_slug}_vs_{away_slug}:{date_slug}"
+        natural_id = f"{league.identity}:{home_slug}_vs_{away_slug}:{date_slug}"
 
+        # 5. Record mapping in cache and memory
         if clean_ext:
-            self._fixture_mappings[clean_ext] = internal_id
+            self._fixture_mappings[(p_name, clean_ext)] = natural_id
+            self._fixture_external_ids.setdefault(natural_id, set()).add(clean_ext)
+            self._cache[(p_name, "FIXTURE", clean_ext)] = natural_id
 
-        return internal_id
+        return natural_id
 
 
 class ProviderDataNormalizer:
@@ -158,12 +357,25 @@ class ProviderDataNormalizer:
         except (DomainValidationError, TypeError, ValueError) as err:
             raise NormalizationError(f"Failed to normalize sport '{provider_sport.name}': {err}") from err
 
-    def normalize_league(self, provider_league: ProviderLeague, sport: Sport) -> League:
+    def normalize_league(
+        self,
+        provider_league: ProviderLeague,
+        sport: Sport,
+        provider_name: str = "mock_provider",
+    ) -> League:
         """Convert a ProviderLeague DTO into a domain League entity with associated Sport."""
         if not isinstance(provider_league, ProviderLeague):
             raise NormalizationError(f"Expected ProviderLeague instance, got {type(provider_league).__name__}")
         if not isinstance(sport, Sport):
             raise NormalizationError(f"Expected domain Sport instance, got {type(sport).__name__}")
+
+        # Relationship validation: league declared sport must match domain Sport
+        if provider_league.sport_name and isinstance(provider_league.sport_name, str):
+            if provider_league.sport_name.strip().lower() != sport.name:
+                raise NormalizationError(
+                    f"Provider league declares sport '{provider_league.sport_name}', which does not match "
+                    f"passed domain Sport '{sport.name}'."
+                )
 
         try:
             # We do NOT pass league_id=provider_league.external_id to prevent leaking
@@ -175,7 +387,11 @@ class ProviderDataNormalizer:
                 country=provider_league.country,
                 league_id=None,
             )
-            self._identity_mapper.record_league_mapping(provider_league.external_id, league)
+            self._identity_mapper.record_league_mapping(
+                provider_league.external_id,
+                league,
+                provider_name=provider_name,
+            )
             return league
         except (DomainValidationError, TypeError, ValueError) as err:
             raise NormalizationError(f"Failed to normalize league '{provider_league.name}': {err}") from err
@@ -232,6 +448,7 @@ class ProviderDataNormalizer:
         provider_fixture: ProviderFixture,
         sport: Sport,
         league: League,
+        provider_name: str = "mock_provider",
     ) -> Fixture:
         """Convert a ProviderFixture DTO into a domain Fixture entity."""
         if not isinstance(provider_fixture, ProviderFixture):
@@ -252,7 +469,9 @@ class ProviderDataNormalizer:
 
         if not provider_fixture.league_id or not isinstance(provider_fixture.league_id, str):
             raise NormalizationError("Provider fixture must declare a non-empty league_id.")
-        if not self._identity_mapper.is_valid_league_reference(provider_fixture.league_id, league):
+        if not self._identity_mapper.is_valid_league_reference(
+            provider_fixture.league_id, league, provider_name=provider_name
+        ):
             raise NormalizationError(
                 f"Provider fixture declares league '{provider_fixture.league_id}', which does not match "
                 f"passed domain League '{league.identity}'."
@@ -268,6 +487,7 @@ class ProviderDataNormalizer:
             home_team=provider_fixture.home_team,
             away_team=provider_fixture.away_team,
             start_time=start_time,
+            provider_name=provider_name,
         )
 
         try:
@@ -305,12 +525,42 @@ class ProviderDataNormalizer:
 
         return dec_line
 
-    def normalize_market(self, provider_market: ProviderMarket, fixture: Fixture) -> Market:
-        """Convert a ProviderMarket DTO into a domain Market entity associated with a Fixture."""
+    def normalize_market(
+        self,
+        provider_market: ProviderMarket,
+        fixture: Fixture,
+        expected_fixture_external_id: str | None = None,
+        provider_name: str = "mock_provider",
+    ) -> Market:
+        """Convert a ProviderMarket DTO into a domain Market entity associated with a Fixture.
+
+        Validates that provider_market.fixture_external_id strictly matches the fixture being ingested.
+        """
         if not isinstance(provider_market, ProviderMarket):
             raise NormalizationError(f"Expected ProviderMarket instance, got {type(provider_market).__name__}")
         if not isinstance(fixture, Fixture):
             raise NormalizationError(f"Expected domain Fixture instance, got {type(fixture).__name__}")
+
+        # Relationship validation: ProviderMarket.fixture_external_id must match ProviderFixture.external_id
+        if not provider_market.fixture_external_id or not isinstance(provider_market.fixture_external_id, str):
+            raise NormalizationError("Provider market must declare a non-empty fixture_external_id.")
+
+        clean_fixture_ref = provider_market.fixture_external_id.strip()
+
+        if expected_fixture_external_id is not None:
+            if clean_fixture_ref != expected_fixture_external_id.strip():
+                raise NormalizationError(
+                    f"Provider market '{provider_market.name}' references fixture '{clean_fixture_ref}', "
+                    f"which does not match expected fixture '{expected_fixture_external_id.strip()}'."
+                )
+        else:
+            if not self._identity_mapper.is_valid_fixture_reference(
+                clean_fixture_ref, fixture, provider_name=provider_name
+            ):
+                raise NormalizationError(
+                    f"Provider market '{provider_market.name}' references fixture '{clean_fixture_ref}', "
+                    f"which does not match domain Fixture '{fixture.fixture_id}'."
+                )
 
         line = self.normalize_line(provider_market.line)
         try:
@@ -351,12 +601,29 @@ class ProviderDataNormalizer:
         except (DomainValidationError, TypeError, ValueError) as err:
             raise NormalizationError(f"Invalid decimal odds '{raw_odds}': {err}") from err
 
-    def normalize_selection(self, provider_selection: ProviderSelection, market: Market) -> Selection:
+    def normalize_selection(
+        self,
+        provider_selection: ProviderSelection,
+        market: Market,
+        expected_market_external_id: str | None = None,
+    ) -> Selection:
         """Convert a ProviderSelection DTO into a domain Selection entity associated with a Market."""
         if not isinstance(provider_selection, ProviderSelection):
             raise NormalizationError(f"Expected ProviderSelection instance, got {type(provider_selection).__name__}")
         if not isinstance(market, Market):
             raise NormalizationError(f"Expected domain Market instance, got {type(market).__name__}")
+
+        # Relationship validation: selection must declare market_external_id
+        if not provider_selection.market_external_id or not isinstance(provider_selection.market_external_id, str):
+            raise NormalizationError("Provider selection must declare a non-empty market_external_id.")
+
+        if expected_market_external_id is not None:
+            if provider_selection.market_external_id.strip() != expected_market_external_id.strip():
+                raise NormalizationError(
+                    f"Provider selection '{provider_selection.name}' references market "
+                    f"'{provider_selection.market_external_id}', which does not match expected market "
+                    f"'{expected_market_external_id.strip()}'."
+                )
 
         odds = self.normalize_odds(provider_selection.odds)
         try:

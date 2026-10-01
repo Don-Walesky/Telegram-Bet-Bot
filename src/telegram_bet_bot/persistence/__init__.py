@@ -12,6 +12,7 @@ from telegram_bet_bot.persistence.repositories import (
     FixtureRepository,
     LeagueRepository,
     MarketRepository,
+    ProviderMappingRepository,
     SelectionRepository,
     SportRepository,
 )
@@ -31,4 +32,5 @@ __all__ = [
     "FixtureRepository",
     "MarketRepository",
     "SelectionRepository",
+    "ProviderMappingRepository",
 ]

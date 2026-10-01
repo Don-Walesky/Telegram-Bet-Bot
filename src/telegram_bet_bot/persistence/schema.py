@@ -81,6 +81,22 @@ CREATE TABLE IF NOT EXISTS selections (
 );
 
 CREATE INDEX IF NOT EXISTS idx_selections_market ON selections (market_identity);
+
+-- 6. Provider Identity Mappings Table
+CREATE TABLE IF NOT EXISTS provider_identity_mappings (
+    provider_name TEXT NOT NULL,
+    entity_type TEXT NOT NULL,
+    external_id TEXT NOT NULL,
+    internal_id TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (provider_name, entity_type, external_id),
+    CHECK (length(trim(provider_name)) > 0),
+    CHECK (entity_type IN ('SPORT', 'LEAGUE', 'FIXTURE', 'MARKET', 'SELECTION')),
+    CHECK (length(trim(external_id)) > 0),
+    CHECK (length(trim(internal_id)) > 0)
+);
+
+CREATE INDEX IF NOT EXISTS idx_mappings_internal ON provider_identity_mappings (entity_type, internal_id);
 """
 
 

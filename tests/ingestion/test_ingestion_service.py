@@ -14,12 +14,17 @@ from telegram_bet_bot.ingestion.models import (
     ProviderSelection,
     ProviderSport,
 )
+from telegram_bet_bot.ingestion.normalizer import (
+    ProviderDataNormalizer,
+    ProviderIdentityMapper,
+)
 from telegram_bet_bot.ingestion.service import FixtureIngestionService
-from telegram_bet_bot.persistence import Database
+from telegram_bet_bot.persistence import Database, PersistenceError
 from telegram_bet_bot.persistence.repositories import (
     FixtureRepository,
     LeagueRepository,
     MarketRepository,
+    ProviderMappingRepository,
     SelectionRepository,
     SportRepository,
 )
@@ -278,11 +283,11 @@ def test_ingest_fixture_bundle_real_persistence_rollback_on_database_failure(
 
     # Ingestion successfully normalizes the bundle, executes SQL INSERT for Sport,
     # League, Fixture, and Market, but FAILS during Selection insertion inside the transaction.
-    with pytest.raises(Exception, match="Simulated SQLite failure during Selection insertion"):
+    with pytest.raises(PersistenceError, match="Simulated SQLite failure during Selection insertion"):
         service.ingest_fixture_bundle(sample_bundle)
 
     # Verify that the transaction rolled back completely and NONE of the partially persisted
-    # entities exist in the database.
+    # entities or identity mappings exist in the database.
     with test_db.connection() as conn:
         sport_repo = SportRepository(conn)
         league_repo = LeagueRepository(conn)
@@ -293,6 +298,266 @@ def test_ingest_fixture_bundle_real_persistence_rollback_on_database_failure(
         assert fixture_repo.list_all() == []
         assert conn.execute("SELECT count(*) FROM markets").fetchone()[0] == 0
         assert conn.execute("SELECT count(*) FROM selections").fetchone()[0] == 0
+        assert conn.execute("SELECT count(*) FROM provider_identity_mappings").fetchone()[0] == 0
+
+
+def test_durable_identity_mapping_survives_new_mapper_instance(
+    test_db: Database,
+    mock_provider: MockSportsDataProvider,
+    sample_bundle: ProviderFixtureBundle,
+) -> None:
+    """Verify that identity mappings survive the creation of a new mapper instance."""
+    service1 = FixtureIngestionService(db=test_db, provider=mock_provider)
+    res1 = service1.ingest_fixture_bundle(sample_bundle)
+
+    # Verify mappings exist in SQLite
+    with test_db.connection() as conn:
+        mapping_repo = ProviderMappingRepository(conn)
+        assert mapping_repo.exists("mock_provider", "FIXTURE", sample_bundle.fixture.external_id)
+        assert mapping_repo.get_internal_id("mock_provider", "FIXTURE", sample_bundle.fixture.external_id) == res1.fixture_id
+        assert mapping_repo.exists("mock_provider", "SPORT", sample_bundle.sport.external_id)
+        assert mapping_repo.exists("mock_provider", "LEAGUE", sample_bundle.league.external_id)
+        assert mapping_repo.exists("mock_provider", "MARKET", sample_bundle.markets[0].external_id)
+        assert mapping_repo.exists("mock_provider", "SELECTION", sample_bundle.selections[0].external_id)
+
+    # Instantiate a completely fresh mapper instance with no in-memory state
+    mapper2 = ProviderIdentityMapper(db=test_db)
+    resolved_id = mapper2.get_internal_id("mock_provider", "FIXTURE", sample_bundle.fixture.external_id)
+    assert resolved_id == res1.fixture_id
+
+    # Ingest using a new service instance backed by mapper2
+    service2 = FixtureIngestionService(
+        db=test_db,
+        provider=mock_provider,
+        normalizer=ProviderDataNormalizer(identity_mapper=mapper2),
+    )
+    res2 = service2.ingest_fixture_bundle(sample_bundle)
+    assert res2.fixture_id == res1.fixture_id
+
+
+def test_durable_identity_mapping_survives_closing_and_reopening_database(
+    tmp_path,
+    sample_bundle: ProviderFixtureBundle,
+) -> None:
+    """Verify that identity mappings survive closing and reopening the SQLite database on disk."""
+    from datetime import timedelta
+    from pathlib import Path
+
+    db_file = tmp_path / "restart_test.db"
+    db1 = Database(db_file)
+    db1.initialize()
+    provider = MockSportsDataProvider()
+    service1 = FixtureIngestionService(db=db1, provider=provider)
+    res1 = service1.ingest_fixture_bundle(sample_bundle)
+
+    # Close/dereference db1 and open a new Database instance pointing to the same file
+    del service1
+    del db1
+
+    db2 = Database(db_file)
+    service2 = FixtureIngestionService(db=db2, provider=provider)
+
+    # Ingest updated fixture with kickoff moved forward by 2 days
+    new_kickoff = sample_bundle.fixture.start_time + timedelta(days=2)
+    updated_fixture = ProviderFixture(
+        external_id=sample_bundle.fixture.external_id,
+        sport_name=sample_bundle.fixture.sport_name,
+        league_id=sample_bundle.fixture.league_id,
+        home_team=sample_bundle.fixture.home_team,
+        away_team=sample_bundle.fixture.away_team,
+        start_time=new_kickoff,
+        status="SCHEDULED",
+    )
+    updated_bundle = ProviderFixtureBundle(
+        fixture=updated_fixture,
+        sport=sample_bundle.sport,
+        league=sample_bundle.league,
+        markets=sample_bundle.markets,
+        selections=sample_bundle.selections,
+    )
+
+    res2 = service2.ingest_fixture_bundle(updated_bundle)
+
+    # Crucial assertion: the fixture ID remains identical to the first ingestion
+    # because the durable mapping survived database restart!
+    assert res2.fixture_id == res1.fixture_id
+
+    with db2.connection() as conn:
+        fix_repo = FixtureRepository(conn)
+        persisted = fix_repo.get(res1.fixture_id)
+        assert persisted.scheduled_start_time == new_kickoff
+
+
+def test_repeated_ingestion_remains_idempotent(
+    test_db: Database,
+    mock_provider: MockSportsDataProvider,
+    sample_bundle: ProviderFixtureBundle,
+) -> None:
+    """Verify that repeated ingestion of the same bundle is idempotent and creates no duplicate rows."""
+    service = FixtureIngestionService(db=test_db, provider=mock_provider)
+
+    res1 = service.ingest_fixture_bundle(sample_bundle)
+    res2 = service.ingest_fixture_bundle(sample_bundle)
+
+    assert res1.fixture_id == res2.fixture_id
+
+    with test_db.connection() as conn:
+        assert conn.execute("SELECT count(*) FROM fixtures").fetchone()[0] == 1
+        assert conn.execute("SELECT count(*) FROM markets").fetchone()[0] == len(sample_bundle.markets)
+        assert conn.execute("SELECT count(*) FROM selections").fetchone()[0] == len(sample_bundle.selections)
+        assert (
+            conn.execute("SELECT count(*) FROM provider_identity_mappings WHERE entity_type='FIXTURE'").fetchone()[0]
+            == 1
+        )
+
+
+def test_identical_external_ids_from_different_providers_remain_distinct(
+    test_db: Database,
+    sample_bundle: ProviderFixtureBundle,
+) -> None:
+    """Verify that the same external ID from two different providers maps to distinct internal entities."""
+    prov_a = MockSportsDataProvider(provider_name="provider_alpha")
+    prov_b = MockSportsDataProvider(provider_name="provider_beta")
+
+    service_a = FixtureIngestionService(db=test_db, provider=prov_a)
+    service_b = FixtureIngestionService(db=test_db, provider=prov_b)
+
+    # Ingest bundle with external_id="ext-fix-100" from provider_alpha
+    res_a = service_a.ingest_fixture_bundle(sample_bundle)
+
+    # Create bundle from provider_beta with the SAME external_id="ext-fix-100", but for a different match
+    fixture_b = ProviderFixture(
+        external_id=sample_bundle.fixture.external_id,  # Same external ID!
+        sport_name="football",
+        league_id="ext-league-1",
+        home_team="Liverpool",
+        away_team="Manchester City",
+        start_time=sample_bundle.fixture.start_time,
+        status="SCHEDULED",
+    )
+    market_b = ProviderMarket(
+        name="Match Winner",
+        fixture_external_id=sample_bundle.fixture.external_id,
+        external_id="ext-mkt-100-mw",
+    )
+    sel_b = ProviderSelection(
+        name="Liverpool",
+        market_external_id="ext-mkt-100-mw",
+        external_id="ext-sel-100-h",
+        odds=Decimal("2.10"),
+    )
+    bundle_b = ProviderFixtureBundle(
+        fixture=fixture_b,
+        sport=sample_bundle.sport,
+        league=sample_bundle.league,
+        markets=[market_b],
+        selections=[sel_b],
+    )
+
+    res_b = service_b.ingest_fixture_bundle(bundle_b)
+
+    # Internal IDs must be distinct
+    assert res_a.fixture_id != res_b.fixture_id
+
+    with test_db.connection() as conn:
+        mapping_repo = ProviderMappingRepository(conn)
+        assert (
+            mapping_repo.get_internal_id("provider_alpha", "FIXTURE", sample_bundle.fixture.external_id)
+            == res_a.fixture_id
+        )
+        assert (
+            mapping_repo.get_internal_id("provider_beta", "FIXTURE", sample_bundle.fixture.external_id)
+            == res_b.fixture_id
+        )
+        assert conn.execute("SELECT count(*) FROM fixtures").fetchone()[0] == 2
+
+
+def test_provider_external_id_change_preserves_domain_identity_when_reliably_matched(
+    test_db: Database,
+    mock_provider: MockSportsDataProvider,
+    sample_bundle: ProviderFixtureBundle,
+) -> None:
+    """Verify that when a provider changes an external ID, the existing domain entity is reused if matched."""
+    service = FixtureIngestionService(db=test_db, provider=mock_provider)
+    res1 = service.ingest_fixture_bundle(sample_bundle)
+
+    # Provider changes external ID from "ext-fix-100" to "ext-fix-100-v2", but for the exact same match
+    new_fixture = ProviderFixture(
+        external_id="ext-fix-100-v2",
+        sport_name=sample_bundle.fixture.sport_name,
+        league_id=sample_bundle.fixture.league_id,
+        home_team=sample_bundle.fixture.home_team,
+        away_team=sample_bundle.fixture.away_team,
+        start_time=sample_bundle.fixture.start_time,
+        status="SCHEDULED",
+    )
+    new_market = ProviderMarket(
+        name=sample_bundle.markets[0].name,
+        fixture_external_id="ext-fix-100-v2",
+        external_id="ext-mkt-100-mw-v2",
+    )
+    new_sel_h = ProviderSelection(
+        name=sample_bundle.selections[0].name,
+        market_external_id="ext-mkt-100-mw-v2",
+        external_id="ext-sel-100-h-v2",
+        odds=Decimal("2.50"),
+    )
+    new_bundle = ProviderFixtureBundle(
+        fixture=new_fixture,
+        sport=sample_bundle.sport,
+        league=sample_bundle.league,
+        markets=[new_market],
+        selections=[new_sel_h],
+    )
+
+    res2 = service.ingest_fixture_bundle(new_bundle)
+
+    # The domain fixture ID is preserved without creating a duplicate domain fixture
+    assert res2.fixture_id == res1.fixture_id
+
+    with test_db.connection() as conn:
+        assert conn.execute("SELECT count(*) FROM fixtures").fetchone()[0] == 1
+        mapping_repo = ProviderMappingRepository(conn)
+        assert (
+            mapping_repo.get_internal_id("mock_provider", "FIXTURE", "ext-fix-100")
+            == res1.fixture_id
+        )
+        assert (
+            mapping_repo.get_internal_id("mock_provider", "FIXTURE", "ext-fix-100-v2")
+            == res1.fixture_id
+        )
+
+
+def test_market_to_fixture_mismatch_in_bundle_rejected_and_leaves_no_records(
+    test_db: Database,
+    mock_provider: MockSportsDataProvider,
+    sample_bundle: ProviderFixtureBundle,
+) -> None:
+    """Verify that a market referencing a differing fixture is rejected before persisting and leaves 0 records."""
+    service = FixtureIngestionService(db=test_db, provider=mock_provider)
+
+    mismatched_market = ProviderMarket(
+        name="Match Winner",
+        fixture_external_id="unrelated-ext-fix-999",
+        external_id="mkt-unrelated",
+    )
+    mismatched_bundle = ProviderFixtureBundle(
+        fixture=sample_bundle.fixture,
+        sport=sample_bundle.sport,
+        league=sample_bundle.league,
+        markets=[mismatched_market],
+        selections=[],
+    )
+
+    with pytest.raises(NormalizationError, match="references fixture 'unrelated-ext-fix-999'"):
+        service.ingest_fixture_bundle(mismatched_bundle)
+
+    # Ensure zero partial database records exist
+    with test_db.connection() as conn:
+        assert conn.execute("SELECT count(*) FROM fixtures").fetchone()[0] == 0
+        assert conn.execute("SELECT count(*) FROM markets").fetchone()[0] == 0
+        assert conn.execute("SELECT count(*) FROM selections").fetchone()[0] == 0
+        assert conn.execute("SELECT count(*) FROM provider_identity_mappings").fetchone()[0] == 0
 
 
 def test_ingest_upcoming_fixtures(test_db: Database, mock_provider: MockSportsDataProvider) -> None:
@@ -310,3 +575,5 @@ def test_ingest_upcoming_fixtures(test_db: Database, mock_provider: MockSportsDa
     with test_db.connection() as conn:
         fixtures = FixtureRepository(conn).list_all()
         assert len(fixtures) == summary.fixtures_count
+        mapping_count = conn.execute("SELECT count(*) FROM provider_identity_mappings").fetchone()[0]
+        assert mapping_count > 0

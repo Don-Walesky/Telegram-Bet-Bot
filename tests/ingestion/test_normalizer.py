@@ -522,3 +522,111 @@ def test_normalize_selection_and_odds(normalizer: ProviderDataNormalizer) -> Non
     ps_inf = ProviderSelection(name="Bad", market_external_id="m1", odds="Infinity")
     with pytest.raises(NormalizationError, match="finite"):
         normalizer.normalize_selection(ps_inf, market)
+
+
+def test_market_relationship_validation_matching_accepted(normalizer: ProviderDataNormalizer) -> None:
+    """Verify that a market with matching fixture_external_id is accepted."""
+    sport = normalizer.normalize_sport(ProviderSport(name="football"))
+    league = normalizer.normalize_league(ProviderLeague(name="EPL", sport_name="football", external_id="lg-1"), sport)
+    fixture = normalizer.normalize_fixture(
+        ProviderFixture(
+            external_id="fix-100",
+            sport_name="football",
+            league_id="lg-1",
+            home_team="Arsenal",
+            away_team="Chelsea",
+            start_time=datetime(2026, 10, 15, 15, 0, tzinfo=timezone.utc),
+        ),
+        sport,
+        league,
+    )
+
+    pm = ProviderMarket(name="Match Winner", fixture_external_id="fix-100", external_id="mkt-1")
+    market = normalizer.normalize_market(pm, fixture, expected_fixture_external_id="fix-100")
+    assert market.name == "Match Winner"
+    assert market.fixture_id == fixture.fixture_id
+
+
+def test_market_relationship_validation_mismatch_rejected(normalizer: ProviderDataNormalizer) -> None:
+    """Verify that a market referencing a different fixture is rejected."""
+    sport = normalizer.normalize_sport(ProviderSport(name="football"))
+    league = normalizer.normalize_league(ProviderLeague(name="EPL", sport_name="football", external_id="lg-1"), sport)
+    fixture = normalizer.normalize_fixture(
+        ProviderFixture(
+            external_id="fix-100",
+            sport_name="football",
+            league_id="lg-1",
+            home_team="Arsenal",
+            away_team="Chelsea",
+            start_time=datetime(2026, 10, 15, 15, 0, tzinfo=timezone.utc),
+        ),
+        sport,
+        league,
+    )
+
+    # Market declares unrelated fixture ID
+    pm_wrong = ProviderMarket(name="Match Winner", fixture_external_id="fix-999-unrelated", external_id="mkt-1")
+
+    with pytest.raises(NormalizationError, match="references fixture 'fix-999-unrelated'"):
+        normalizer.normalize_market(pm_wrong, fixture, expected_fixture_external_id="fix-100")
+
+    # Also fails without explicit expected_fixture_external_id via identity mapper check
+    with pytest.raises(NormalizationError, match="references fixture 'fix-999-unrelated'"):
+        normalizer.normalize_market(pm_wrong, fixture)
+
+
+def test_market_relationship_validation_empty_reference_rejected(normalizer: ProviderDataNormalizer) -> None:
+    """Verify that a market with empty or missing fixture reference is rejected."""
+    sport = normalizer.normalize_sport(ProviderSport(name="football"))
+    league = normalizer.normalize_league(ProviderLeague(name="EPL", sport_name="football", external_id="lg-1"), sport)
+    fixture = normalizer.normalize_fixture(
+        ProviderFixture(
+            external_id="fix-100",
+            sport_name="football",
+            league_id="lg-1",
+            home_team="Arsenal",
+            away_team="Chelsea",
+            start_time=datetime(2026, 10, 15, 15, 0, tzinfo=timezone.utc),
+        ),
+        sport,
+        league,
+    )
+
+    pm_empty = ProviderMarket(name="Match Winner", fixture_external_id="", external_id="mkt-1")
+    with pytest.raises(NormalizationError, match="must declare a non-empty fixture_external_id"):
+        normalizer.normalize_market(pm_empty, fixture)
+
+
+def test_league_sport_relationship_mismatch_rejected(normalizer: ProviderDataNormalizer) -> None:
+    """Verify that a league declaring a sport differing from the passed domain Sport is rejected."""
+    sport = normalizer.normalize_sport(ProviderSport(name="football"))
+    pl_bad = ProviderLeague(name="NBA", sport_name="basketball", external_id="lg-nba")
+
+    with pytest.raises(NormalizationError, match="declares sport 'basketball', which does not match passed domain Sport 'football'"):
+        normalizer.normalize_league(pl_bad, sport)
+
+
+def test_selection_market_relationship_mismatch_rejected(normalizer: ProviderDataNormalizer) -> None:
+    """Verify that a selection referencing a differing market is rejected."""
+    sport = normalizer.normalize_sport(ProviderSport(name="football"))
+    league = normalizer.normalize_league(ProviderLeague(name="EPL", sport_name="football", external_id="lg-1"), sport)
+    fixture = normalizer.normalize_fixture(
+        ProviderFixture(
+            external_id="fix-1",
+            sport_name="football",
+            league_id="lg-1",
+            home_team="A",
+            away_team="B",
+            start_time=datetime(2026, 10, 15, 15, 0, tzinfo=timezone.utc),
+        ),
+        sport,
+        league,
+    )
+    market = normalizer.normalize_market(
+        ProviderMarket(name="MW", fixture_external_id="fix-1", external_id="mkt-target"),
+        fixture,
+    )
+
+    ps_wrong = ProviderSelection(name="Home", market_external_id="mkt-other", external_id="s1", odds=Decimal("2.00"))
+    with pytest.raises(NormalizationError, match="references market 'mkt-other', which does not match expected market 'mkt-target'"):
+        normalizer.normalize_selection(ps_wrong, market, expected_market_external_id="mkt-target")

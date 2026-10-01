@@ -4,7 +4,7 @@ from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 import pytest
 
-from telegram_bet_bot.domain import FixtureStatus, Sport
+from telegram_bet_bot.domain import FixtureStatus, League, Sport
 from telegram_bet_bot.ingestion.exceptions import NormalizationError
 from telegram_bet_bot.ingestion.models import (
     ProviderFixture,
@@ -432,6 +432,103 @@ def test_identity_separation_explicit_custom_mapping_respected() -> None:
     )
     fixture = custom_normalizer.normalize_fixture(pf, sport, league)
     assert fixture.fixture_id == "custom-internal-ucl-final-2026"
+
+
+def test_custom_mappings_isolated_between_providers_with_identical_external_id() -> None:
+    """Verify identical external IDs from different providers do not share or overwrite custom mappings."""
+    mapper = ProviderIdentityMapper()
+
+    # Register custom mappings for the same external ID under two distinct providers
+    shared_ext_id = "shared-match-id-100"
+    mapper.register_fixture_mapping(
+        external_id=shared_ext_id,
+        internal_id="domain-fixture-alpha-custom",
+        provider_name="provider_alpha",
+    )
+    mapper.register_fixture_mapping(
+        external_id=shared_ext_id,
+        internal_id="domain-fixture-beta-custom",
+        provider_name="provider_beta",
+    )
+
+    # 1. Lookup isolation
+    assert mapper.get_internal_id("provider_alpha", "FIXTURE", shared_ext_id) == "domain-fixture-alpha-custom"
+    assert mapper.get_internal_id("provider_beta", "FIXTURE", shared_ext_id) == "domain-fixture-beta-custom"
+    # Unmapped third provider has no custom mapping for this external ID
+    assert mapper.get_internal_id("provider_gamma", "FIXTURE", shared_ext_id) is None
+
+    # 2. Normalization isolation
+    normalizer = ProviderDataNormalizer(identity_mapper=mapper)
+    sport = normalizer.normalize_sport(ProviderSport(name="football"))
+    league = normalizer.normalize_league(
+        ProviderLeague(name="Premier League", sport_name="football", external_id="epl"),
+        sport,
+    )
+    pf_alpha = ProviderFixture(
+        external_id=shared_ext_id,
+        sport_name="football",
+        league_id="epl",
+        home_team="Arsenal",
+        away_team="Chelsea",
+        start_time=datetime(2026, 12, 1, 15, 0, tzinfo=timezone.utc),
+    )
+    pf_beta = ProviderFixture(
+        external_id=shared_ext_id,
+        sport_name="football",
+        league_id="epl",
+        home_team="Arsenal",
+        away_team="Chelsea",
+        start_time=datetime(2026, 12, 1, 15, 0, tzinfo=timezone.utc),
+    )
+    pf_gamma = ProviderFixture(
+        external_id=shared_ext_id,
+        sport_name="football",
+        league_id="epl",
+        home_team="Arsenal",
+        away_team="Chelsea",
+        start_time=datetime(2026, 12, 1, 15, 0, tzinfo=timezone.utc),
+    )
+
+    fix_alpha = normalizer.normalize_fixture(pf_alpha, sport, league, provider_name="provider_alpha")
+    fix_beta = normalizer.normalize_fixture(pf_beta, sport, league, provider_name="provider_beta")
+    fix_gamma = normalizer.normalize_fixture(pf_gamma, sport, league, provider_name="provider_gamma")
+
+    assert fix_alpha.fixture_id == "domain-fixture-alpha-custom"
+    assert fix_beta.fixture_id == "domain-fixture-beta-custom"
+    assert fix_gamma.fixture_id == "football:premier_league:arsenal_vs_chelsea:20261201"
+    assert fix_alpha.fixture_id != fix_beta.fixture_id
+
+
+def test_custom_mappings_isolated_between_different_entity_types() -> None:
+    """Verify custom mappings for the same external ID remain isolated across entity types."""
+    mapper = ProviderIdentityMapper()
+
+    shared_ext_id = "shared-cross-type-id-555"
+    mapper.register_custom_mapping("provider_alpha", "SPORT", shared_ext_id, "internal-sport-custom")
+    mapper.register_custom_mapping("provider_alpha", "LEAGUE", shared_ext_id, "internal-league-custom")
+    mapper.register_custom_mapping("provider_alpha", "FIXTURE", shared_ext_id, "internal-fixture-custom")
+    mapper.register_custom_mapping("provider_alpha", "MARKET", shared_ext_id, "internal-market-custom")
+    mapper.register_custom_mapping("provider_alpha", "SELECTION", shared_ext_id, "internal-selection-custom")
+
+    # Each entity type retrieves its exact assigned internal ID
+    assert mapper.get_internal_id("provider_alpha", "SPORT", shared_ext_id) == "internal-sport-custom"
+    assert mapper.get_internal_id("provider_alpha", "LEAGUE", shared_ext_id) == "internal-league-custom"
+    assert mapper.get_internal_id("provider_alpha", "FIXTURE", shared_ext_id) == "internal-fixture-custom"
+    assert mapper.get_internal_id("provider_alpha", "MARKET", shared_ext_id) == "internal-market-custom"
+    assert mapper.get_internal_id("provider_alpha", "SELECTION", shared_ext_id) == "internal-selection-custom"
+
+    # Unmapped entity type or other provider cannot retrieve mappings
+    assert mapper.get_internal_id("provider_alpha", "UNKNOWN_TYPE", shared_ext_id) is None
+    assert mapper.get_internal_id("provider_beta", "FIXTURE", shared_ext_id) is None
+    assert mapper.get_internal_id("provider_beta", "MARKET", shared_ext_id) is None
+
+    # Fixture resolution only matches FIXTURE entity type mapping
+    league = League(name="Premier League", sport=Sport(name="football"), country="England")
+    start = datetime(2026, 12, 1, 15, 0, tzinfo=timezone.utc)
+    res_id = mapper.resolve_fixture_id(shared_ext_id, league, "Arsenal", "Chelsea", start, provider_name="provider_alpha")
+    assert res_id == "internal-fixture-custom"
+    assert res_id != "internal-market-custom"
+    assert res_id != "internal-sport-custom"
 
 
 # ============================================================================

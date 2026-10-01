@@ -50,7 +50,7 @@ class ProviderIdentityMapper:
     ) -> None:
         self._connection = connection
         self._db = db
-        self._custom_mappings: dict[str, str] = {}  # external_id -> internal_id
+        self._custom_mappings: dict[tuple[str, str, str], str] = {}  # (provider_name, entity_type, external_id) -> internal_id
         self._fixture_mappings: dict[tuple[str, str], str] = {}  # (provider_name, external_id) -> internal_id
         self._league_external_ids: dict[str, set[str]] = {}  # league_identity -> set of known external_ids
         self._fixture_external_ids: dict[str, set[str]] = {}  # fixture_id -> set of known external_ids
@@ -64,13 +64,48 @@ class ProviderIdentityMapper:
         """Attach an active SQLite connection."""
         self._connection = connection
 
-    def register_fixture_mapping(self, external_id: str, internal_id: str) -> None:
+    def register_fixture_mapping(
+        self,
+        external_id: str,
+        internal_id: str,
+        provider_name: str = "mock_provider",
+    ) -> None:
         """Register an explicit custom mapping from an external fixture ID to an internal domain fixture ID."""
+        self.register_custom_mapping(
+            provider_name=provider_name,
+            entity_type="FIXTURE",
+            external_id=external_id,
+            internal_id=internal_id,
+        )
+
+    def register_custom_mapping(
+        self,
+        provider_name: str,
+        entity_type: str,
+        external_id: str,
+        internal_id: str,
+    ) -> None:
+        """Register an explicit custom mapping for a specific provider and entity type."""
+        if not isinstance(provider_name, str) or not provider_name.strip():
+            raise ValueError("Provider name must be a non-empty string.")
+        if not isinstance(entity_type, str) or not entity_type.strip():
+            raise ValueError("Entity type must be a non-empty string.")
         if not isinstance(external_id, str) or not external_id.strip():
             raise ValueError("External ID must be a non-empty string.")
         if not isinstance(internal_id, str) or not internal_id.strip():
             raise ValueError("Internal ID must be a non-empty string.")
-        self._custom_mappings[external_id.strip()] = internal_id.strip()
+
+        p_name = provider_name.strip()
+        e_type = entity_type.strip().upper()
+        clean_ext = external_id.strip()
+        clean_int = internal_id.strip()
+
+        self._custom_mappings[(p_name, e_type, clean_ext)] = clean_int
+        if e_type == "LEAGUE":
+            self._league_external_ids.setdefault(clean_int, set()).add(clean_ext)
+        elif e_type == "FIXTURE":
+            self._fixture_mappings[(p_name, clean_ext)] = clean_int
+            self._fixture_external_ids.setdefault(clean_int, set()).add(clean_ext)
 
     def get_internal_id(
         self,
@@ -86,17 +121,17 @@ class ProviderIdentityMapper:
         if not clean_ext:
             return None
 
-        # 1. Explicit in-memory custom override (fixtures)
-        if clean_ext in self._custom_mappings:
-            return self._custom_mappings[clean_ext]
-
         p_name = provider_name.strip() if provider_name else "mock_provider"
         e_type = entity_type.strip().upper() if entity_type else ""
-        cache_key = (p_name, e_type, clean_ext)
+        mapping_key = (p_name, e_type, clean_ext)
+
+        # 1. Explicit in-memory custom override (scoped by provider and entity type)
+        if mapping_key in self._custom_mappings:
+            return self._custom_mappings[mapping_key]
 
         # 2. In-memory cache
-        if cache_key in self._cache:
-            return self._cache[cache_key]
+        if mapping_key in self._cache:
+            return self._cache[mapping_key]
 
         # 3. Persistent repository lookup
         conn = connection or self._connection
@@ -104,7 +139,7 @@ class ProviderIdentityMapper:
             repo = ProviderMappingRepository(conn)
             res = repo.get_internal_id(p_name, e_type, clean_ext)
             if res is not None:
-                self._cache[cache_key] = res
+                self._cache[mapping_key] = res
                 if e_type == "LEAGUE":
                     self._league_external_ids.setdefault(res, set()).add(clean_ext)
                 elif e_type == "FIXTURE":
@@ -115,7 +150,7 @@ class ProviderIdentityMapper:
                 repo = ProviderMappingRepository(db_conn)
                 res = repo.get_internal_id(p_name, e_type, clean_ext)
                 if res is not None:
-                    self._cache[cache_key] = res
+                    self._cache[mapping_key] = res
                     if e_type == "LEAGUE":
                         self._league_external_ids.setdefault(res, set()).add(clean_ext)
                     elif e_type == "FIXTURE":
@@ -187,6 +222,10 @@ class ProviderIdentityMapper:
         clean_int = internal_id.strip() if internal_id else ""
 
         found = set()
+        for (cust_p, cust_type, cust_ext), cust_int in self._custom_mappings.items():
+            if cust_p == p_name and cust_type == e_type and cust_int == clean_int:
+                found.add(cust_ext)
+
         if e_type == "LEAGUE":
             found.update(self._league_external_ids.get(clean_int, set()))
         elif e_type == "FIXTURE":
@@ -295,12 +334,12 @@ class ProviderIdentityMapper:
         5. If provider changed external ID, reuse canonical domain identity if match is unambiguous.
         """
         clean_ext = external_id.strip() if external_id and isinstance(external_id, str) else ""
-
-        # 1. Explicit override
-        if clean_ext and clean_ext in self._custom_mappings:
-            return self._custom_mappings[clean_ext]
-
         p_name = provider_name.strip() if provider_name else "mock_provider"
+        custom_key = (p_name, "FIXTURE", clean_ext)
+
+        # 1. Explicit override (scoped by provider and FIXTURE entity type)
+        if clean_ext and custom_key in self._custom_mappings:
+            return self._custom_mappings[custom_key]
 
         # 2. Persistent mapping in database
         if clean_ext:

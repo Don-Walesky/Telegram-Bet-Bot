@@ -59,6 +59,7 @@ Subsequent phases (telegram tip ingestion, risk engine, settlement, and Telegram
 ## Environment Setup
 
 ### 1. Prerequisites
+
 - Python 3.11 or higher (Python 3.14 supported)
 - Git
 
@@ -92,6 +93,7 @@ pip install pytest
 ## Running the Application
 
 ### 1. Configuration (Optional)
+
 Copy the example environment template to create a local `.env` file:
 
 ```bash
@@ -99,17 +101,20 @@ cp .env.example .env
 ```
 
 Default settings:
+
 - `APP_ENV=development`
 - `LOG_LEVEL=INFO`
 
 ### 2. Run Entry Point
 
 Run using the Python module:
+
 ```bash
 python -m telegram_bet_bot.main
 ```
 
 Or via the installed console script:
+
 ```bash
 telegram-bet-bot
 ```
